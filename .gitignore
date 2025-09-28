@@ -1,0 +1,6 @@
+/.cache
+/.env
+/.nix
+/2_found
+/2_preprocessing
+/data
