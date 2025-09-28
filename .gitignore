@@ -2,7 +2,7 @@
 .env/
 data/
 *.html
-*.txt
+*file.txt
 *__pycache__/
 *.pyc
 *.lock

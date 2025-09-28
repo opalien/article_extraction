@@ -1,0 +1,6 @@
+# Core third-party dependencies for the CDD 2025 project
+PyMuPDF
+pandas
+requests
+torch
+transformers
