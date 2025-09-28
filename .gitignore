@@ -1,6 +1,8 @@
-/.cache
-/.env
-/.nix
-/2_found
-/2_preprocessing
-/data
+.cache/
+.env/
+data/
+*.html
+*.txt
+*__pycache__/
+*.pyc
+*.lock
