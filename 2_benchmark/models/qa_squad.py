@@ -246,4 +246,4 @@ def qa_squad(article: str, label: str, model: str="deepset/deberta-v3-base-squad
 
     # Réponse la plus probable (texte)
     best_answer = top_list[0]["text"] if top_list else ""
-    return best_answer
+    return (best_answer, top_list)

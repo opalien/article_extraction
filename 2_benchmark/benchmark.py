@@ -14,7 +14,8 @@ df = pd.read_csv("data/tables/train.csv")
 
 data = {
     "Model_predicted": [],
-    "Model_true": []
+    "Model_true": [],
+    "other_predicted": []
 }
 
 
@@ -30,7 +31,9 @@ for i in range(1000):
     if os.path.exists(f"data/files/train/{i}.txt"):
         print(f"File {i}.txt exists")
         with open(f"data/files/train/{i}.txt", "r") as f:
-            data["Model_predicted"].append(qa_squad(f.read(), "what is the full name of the proposed model ? It's not in the references"))
+            (best, other) = qa_squad(f.read(), "what is the full name of the proposed model ? It's not in the references")
+            data["Model_predicted"].append(best)
+            data["other_predicted"].append(other)
             data["Model_true"].append(df.iloc[i]["Model"])
         #print(pd.DataFrame(data).to_string(max_rows=None, max_cols=None))
     else:
