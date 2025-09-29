@@ -13,7 +13,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
 
-def qa_squad(article: str, label: str, model: str="deepset/deberta-v3-base-squad2") -> str:
+def qa_squad(article: str, label: str, model: str="deepset/deberta-v3-large-squad2") -> str:
     """
     Calcule la heatmap des probas (marginale inside) + sauvegarde HTML,
     renvoie la réponse la plus probable et affiche les 10 meilleures dans le terminal.
