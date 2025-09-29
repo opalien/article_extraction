@@ -8,7 +8,7 @@ import torch
 print("cuda" if torch.cuda.is_available() else "cpu")
 
 
-models = [lambda f: qa_squad(f, "what is the full name of the proposed machine learning model ? It is not in the references")]
+models = [lambda f: qa_squad(f, "what is the name that the authors presents ? It is not in the references")]
 
 df = pd.read_csv("data/tables/train.csv")
 
