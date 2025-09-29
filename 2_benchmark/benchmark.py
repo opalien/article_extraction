@@ -40,4 +40,4 @@ for i in range(1000):
 
     df_data = pd.DataFrame(data)
 
-    df_data.to_csv("2_banchmark/prediction.csv", index=False)
+    df_data.to_csv("2_benchmark/prediction.csv", index=False)
