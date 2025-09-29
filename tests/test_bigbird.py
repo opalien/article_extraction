@@ -2,18 +2,19 @@
 # -*- coding: utf-8 -*-
 
 import argparse, re, html, textwrap, math
+from collections import defaultdict
 import torch
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
 
 MODEL_ID = "FredNajjar/bigbird-QA-squad_v2.3"
 
+# ---------- petits helpers UI ----------
 def split_words(text: str):
-    import re
     return list(re.finditer(r"\S+", text, flags=re.M))
 
-def rgba(a: float) -> str:
-    a = max(0.0, min(1.0, float(a)))
-    return f"background-color: rgba(255,165,0,{a});"
+def rgba(alpha: float) -> str:
+    alpha = max(0.0, min(1.0, float(alpha)))
+    return f"background-color: rgba(255,165,0,{alpha});"
 
 def render_html(text, char_scores, top_spans, title="QA inside probability heatmap", meta_note=""):
     parts = []
@@ -33,7 +34,7 @@ def render_html(text, char_scores, top_spans, title="QA inside probability heatm
     """)
     if meta_note:
         parts.append(f"<div class='legend'><strong>Note:</strong> {html.escape(meta_note)}</div>")
-    parts.append("<div class='legend'>Heatmap = ∑<sub>i≤k≤j</sub> p(span(i,j)) projetée aux caractères.</div>")
+    parts.append("<div class='legend'>Heatmap = ∑<sub>i≤k≤j</sub> p(span(i,j)) projetée aux caractères (plus c’est orange, plus c’est probable).</div>")
     parts.append("<pre>")
     pos = 0
     for m in split_words(text):
@@ -62,16 +63,23 @@ def render_html(text, char_scores, top_spans, title="QA inside probability heatm
     parts.append("</div>")
     return "".join(parts)
 
+def logaddexp(a, b):
+    m = max(a, b)
+    return m + math.log1p(math.exp(a - m) + math.exp(b - m) - 1.0) if m != -float("inf") else b
+
+# ---------- script principal ----------
 def main():
-    parser = argparse.ArgumentParser(description="BigBird QA (SQuAD v2) — heatmap + top 10 spans (+ taille article en tokens)")
-    parser.add_argument("input_txt", help="Chemin du fichier .txt")
-    parser.add_argument("question", help="Question")
-    parser.add_argument("output_html", help="Chemin du .html de sortie")
-    parser.add_argument("--max_answer_len", type=int, default=30, help="Longueur max de la réponse (en tokens)")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description="BigBird QA (SQuAD v2) — sliding window heatmap + top 10 spans")
+    ap.add_argument("input_txt", help="Chemin du fichier .txt")
+    ap.add_argument("question", help="Question")
+    ap.add_argument("output_html", help="Chemin du .html de sortie")
+    ap.add_argument("--stride", type=int, default=1024, help="Chevauchement (tokens) entre fenêtres")
+    ap.add_argument("--max_answer_len", type=int, default=30, help="Longueur max d’un span (tokens du contexte)")
+    ap.add_argument("--topk_per_chunk", type=int, default=800, help="Nb de spans conservés par chunk pour le reranking global")
+    args = ap.parse_args()
 
     with open(args.input_txt, "r", encoding="utf-8", errors="ignore") as f:
-        context = f.read()
+        article = f.read()
 
     tok = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
     model = AutoModelForQuestionAnswering.from_pretrained(MODEL_ID)
@@ -79,120 +87,159 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
-    # ---- Afficher la taille de l'article en tokens (tokenizer du modèle) ----
-    ctx_only = tok(context, add_special_tokens=False)  # pas de truncation ici
-    ctx_token_len = len(ctx_only["input_ids"])
-    max_len = getattr(tok, "model_max_length", 512)
-    print(f"[info] article tokens (sans specials) = {ctx_token_len}")
-    print(f"[info] model_max_length = {max_len}")
+    # --- stats taille article (exigé) ---
+    art_tok = tok(article, add_special_tokens=False)
+    article_tokens = len(art_tok["input_ids"])
+    max_len = getattr(tok, "model_max_length", 4096)
+    print(f"[info] article token length (sans specials) = {article_tokens}")
+    print(f"[info] model_max_length = {max_len} | stride = {args.stride}")
 
-    # Encodage pair (question, contexte) avec tronquage sur le contexte si nécessaire
+    # --- fenêtrage automatique HF (glissant sur le contexte) ---
     enc = tok(
-        args.question, context,
-        return_tensors="pt",
+        args.question, article,
+        return_tensors=None,                    # on manipule chunk par chunk
         return_offsets_mapping=True,
+        return_overflowing_tokens=True,
         truncation="only_second",
         max_length=max_len,
-        padding=False
+        stride=args.stride,
+        padding=False,
     )
-    pair_len = enc["input_ids"].shape[1]
-    print(f"[info] pair length (question+specials+context tronqué) = {pair_len}")
+    n_chunks = len(enc["input_ids"])
+    print(f"[info] #chunks = {n_chunks}")
 
-    # --- Forward ---
-    with torch.no_grad():
-        out = model(input_ids=enc["input_ids"].to(device),
-                    attention_mask=enc["attention_mask"].to(device))
-    start_logits = out.start_logits[0].cpu()
-    end_logits   = out.end_logits[0].cpu()
+    # agrégats heatmap + global normalisation (approx avec top-k/chunk)
+    char_scores = torch.zeros(len(article), dtype=torch.float32)
+    span_logsum = defaultdict(lambda: -float("inf"))  # (start,end) -> logsumexp des (s_i+e_j) multi-chunks
+    all_cls_logs = []  # CLS log-scores par chunk
 
-    # Indices du contexte gardés (avec offsets valides)
-    seq_ids = enc.sequence_ids(0)
-    offsets = enc["offset_mapping"][0].tolist()
-    ctx_idx = [t for t,s in enumerate(seq_ids)
-               if s == 1 and offsets[t] is not None and offsets[t][1] > offsets[t][0]]
-    N = len(ctx_idx)
-    truncated = max(0, ctx_token_len - N)
-    print(f"[info] context tokens kept this forward = {N} | truncated ≈ {truncated}")
+    kept_per_chunk = []
 
-    if not ctx_idx:
-        print("Aucun token de contexte encodé.")
+    for w in range(n_chunks):
+        input_ids = torch.tensor(enc["input_ids"][w]).unsqueeze(0).to(device)
+        attn_mask = torch.tensor(enc["attention_mask"][w]).unsqueeze(0).to(device)
+        offsets    = enc["offset_mapping"][w]
+        seq_ids    = enc.sequence_ids(w)
+
+        with torch.no_grad():
+            out = model(input_ids=input_ids, attention_mask=attn_mask)
+        start_logits = out.start_logits[0].detach().cpu()
+        end_logits   = out.end_logits[0].detach().cpu()
+
+        # tokens de contexte gardés dans ce chunk
+        ctx_idx = [t for t, s in enumerate(seq_ids)
+                   if s == 1 and offsets[t] is not None and offsets[t][1] > offsets[t][0]]
+        N = len(ctx_idx)
+        kept_per_chunk.append(N)
+        print(f"[chunk {w+1:>3}/{n_chunks}] context tokens kept = {N}")
+
+        if N == 0:
+            all_cls_logs.append(float((start_logits[0] + end_logits[0]).item()))
+            continue
+
+        s = start_logits[ctx_idx]  # (N,)
+        e = end_logits[ctx_idx]    # (N,)
+        LMAX = max(1, args.max_answer_len)
+
+        # matrice conjointe des spans valides
+        scores = s[:, None] + e[None, :]
+        ii = torch.arange(N)
+        lenmask = (ii[None, :] - ii[:, None] + 1) <= LMAX
+        valid = torch.triu(torch.ones_like(scores, dtype=torch.bool)) & lenmask
+        joint = scores.masked_fill(~valid, float("-inf"))
+
+        # normalisation locale (avec no-answer) -- pour HEATMAP du chunk
+        cls_score = start_logits[0] + end_logits[0]
+        all_cls_logs.append(float(cls_score.item()))
+        flat = torch.cat([joint[valid], cls_score.view(1)])
+        Z = torch.logsumexp(flat, dim=0)
+        p_span = torch.exp(joint - Z)  # somme = 1 - p_no
+
+        # inside marginale du chunk
+        inside = torch.stack([p_span[:k+1, k:].sum() for k in range(N)])  # (N,)
+
+        # projection caractères & union probabiliste (évite pics doublons)
+        for local_k, tok_k in enumerate(ctx_idx):
+            st, ed = offsets[tok_k]
+            if ed > st:
+                val = float(inside[local_k])
+                prev = char_scores[st:ed]
+                char_scores[st:ed] = 1.0 - (1.0 - prev) * (1.0 - val)
+
+        # --- collecte TOP-K spans (log-scores bruts) pour normalisation GLOBALE ---
+        vals = p_span[valid]  # on s'en sert pour identifier les spans forts
+        M = int(vals.numel())
+        ksave = min(args.topk_per_chunk, M)
+        if ksave > 0:
+            topv, topi = torch.topk(vals, ksave)
+            ij = torch.nonzero(valid, as_tuple=False)[topi]
+            for (i_idx, j_idx) in ij.tolist():
+                tok_i = ctx_idx[i_idx]; tok_j = ctx_idx[j_idx]
+                st_char, _ = offsets[tok_i]
+                _, ed_char = offsets[tok_j]
+                if ed_char <= st_char:
+                    continue
+                # log-score brut (sans normalisation locale)
+                lg = float((s[i_idx] + e[j_idx]).item())
+                key = (int(st_char), int(ed_char))
+                # log-sum-exp incrémental
+                cur = span_logsum[key]
+                if cur == -float("inf"):
+                    span_logsum[key] = lg
+                else:
+                    m = max(cur, lg)
+                    span_logsum[key] = m + math.log(math.exp(cur - m) + math.exp(lg - m))
+
+    # stats chunks
+    if kept_per_chunk:
+        avg_kept = sum(kept_per_chunk) / len(kept_per_chunk)
+        print(f"[info] avg context tokens kept/chunk ≈ {avg_kept:.1f}")
+
+    # --- normalisation GLOBALE approximée (sur spans collectés + tous les CLS) ---
+    if not span_logsum:
+        print("Aucun span collecté (vérifiez max_answer_len/stride).")
         with open(args.output_html, "w", encoding="utf-8") as f:
-            f.write("<p>Aucun contexte encodé.</p>")
+            f.write("<p>Aucun segment détecté.</p>")
         return
 
-    s = start_logits[ctx_idx]
-    e = end_logits[ctx_idx]
-    LMAX = max(1, args.max_answer_len)
+    Z_global = None
+    # logsumexp(spans U all CLS)
+    span_vals = list(span_logsum.values())
+    # logsumexp stable
+    m = max(span_vals + all_cls_logs)
+    Z_global = m + math.log(sum(math.exp(x - m) for x in span_vals + all_cls_logs))
 
-    # Conjointe des spans
-    scores = s[:, None] + e[None, :]
-    ii = torch.arange(N)
-    lenmask = (ii[None, :] - ii[:, None] + 1) <= LMAX
-    valid = torch.triu(torch.ones_like(scores, dtype=torch.bool)) & lenmask
-    joint = scores.masked_fill(~valid, float("-inf"))
+    # prob globale par span unique
+    spans = []
+    for (st, ed), lg in span_logsum.items():
+        p = math.exp(lg - Z_global)
+        spans.append({"start": st, "end": ed, "prob": p})
 
-    # Normalisation avec no-answer
-    cls_score = start_logits[0] + end_logits[0]
-    flat = torch.cat([joint[valid], cls_score.view(1)])
-    Z = torch.logsumexp(flat, dim=0)
-    p_span = torch.exp(joint - Z)
-    p_no = float(torch.exp(cls_score - Z))
+    # trier + calculer la "margin_vs_CLS" indicative (on ne l'a pas globalement; on met None)
+    spans.sort(key=lambda x: x["prob"], reverse=True)
+    top10 = []
+    for sp in spans[:10]:
+        sp["text"] = article[sp["start"]:sp["end"]]
+        sp["margin"] = 0.0  # placeholder (les margins par chunk ne sont pas comparables globalement)
+        top10.append(sp)
 
-    # Marginale inside
-    inside = torch.stack([p_span[:k+1, k:].sum() for k in range(N)])
+    # --- impression terminal (Top-10) ---
+    print("\nTop segments (global approx):")
+    for r, seg in enumerate(top10, 1):
+        snip = re.sub(r"\s+", " ", seg["text"]).strip()
+        snip = textwrap.shorten(snip, width=160, placeholder="…")
+        print(f"{r:2d}. p≈{seg['prob']:.4f}  [{seg['start']},{seg['end']})  {snip}")
 
-    # Heatmap caractères
-    import numpy as np
-    char_scores = torch.zeros(len(context), dtype=torch.float32)
-    for local_k, tok_k in enumerate(ctx_idx):
-        st, ed = offsets[tok_k]
-        if ed > st:
-            val = float(inside[local_k])
-            prev = char_scores[st:ed]
-            char_scores[st:ed] = torch.maximum(prev, torch.tensor(val))
+    # --- HTML heatmap ---
     mx = float(char_scores.max().item())
     if mx > 0: char_scores /= mx
-
-    # Top-10 spans
-    vals = p_span[valid]
-    k = min(10, int(vals.numel()))
-    topv, topi = torch.topk(vals, k)
-    ij = torch.nonzero(valid, as_tuple=False)[topi]
-    top_spans = []
-    for (i_idx, j_idx), prob in zip(ij.tolist(), topv.tolist()):
-        tok_i = ctx_idx[i_idx]; tok_j = ctx_idx[j_idx]
-        st_char, _ = offsets[tok_i]
-        _, ed_char = offsets[tok_j]
-        if ed_char <= st_char: continue
-        margin = float((s[i_idx] + e[j_idx] - cls_score).item())
-        top_spans.append({
-            "start": int(st_char),
-            "end": int(ed_char),
-            "prob": float(prob),
-            "margin": margin,
-            "text": context[st_char:ed_char]
-        })
-    top_spans.sort(key=lambda x: x["prob"], reverse=True)
-
-    # Print
-    print(f"p(no-answer) ≈ {p_no:.4f}")
-    print("Top segments:")
-    if not top_spans:
-        print("(vide)")
-    else:
-        for r, seg in enumerate(top_spans, 1):
-            snip = re.sub(r"\s+", " ", seg["text"]).strip()
-            snip = textwrap.shorten(snip, width=160, placeholder="…")
-            print(f"{r:2d}. p≈{seg['prob']:.4f}  margin={seg['margin']:.2f}  [{seg['start']},{seg['end']})  {snip}")
-
-    # HTML
-    meta = (f"model={MODEL_ID}, max_len={max_len}, Lmax={LMAX}; "
-            f"question={args.question} | article_tokens={ctx_token_len} | "
-            f"kept={N}, truncated≈{truncated}")
-    html_str = render_html(context, char_scores, top_spans, meta_note=meta)
+    meta = (f"model={MODEL_ID}, model_max_length={max_len}, stride={args.stride}, "
+            f"Lmax={args.max_answer_len}, topk_per_chunk={args.topk_per_chunk}, "
+            f"article_tokens={article_tokens}, chunks={n_chunks}")
+    html_str = render_html(article, char_scores, top10, meta_note=meta)
     with open(args.output_html, "w", encoding="utf-8") as f:
         f.write(html_str)
-    print(f"HTML → {args.output_html}")
+    print(f"\nHTML → {args.output_html}")
 
 if __name__ == "__main__":
     main()
