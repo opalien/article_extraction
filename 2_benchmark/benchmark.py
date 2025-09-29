@@ -10,7 +10,7 @@ print("cuda" if torch.cuda.is_available() else "cpu")
 
 models = [lambda f: qa_squad(f, "what is the full name of the proposed machine learning model ? It is not in the references")]
 
-df = pd.read_csv("data/files/train.csv")
+df = pd.read_csv("data/tables/train.csv")
 
 data = {
     "Model_predicted": [],
@@ -39,4 +39,5 @@ for i in range(1000):
     print(pd.DataFrame(data).to_string(max_rows=None, max_cols=None))
 
     df_data = pd.DataFrame(data)
+
     df_data.to_csv("2_banchmark/prediction.csv", index=False)
