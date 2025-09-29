@@ -2,6 +2,10 @@
 # "deepset/deberta-v3-large-squad2"
 # "deepset/deberta-v3-base-squad2"
 
+MODEL_ID = "FredNajjar/bigbird-QA-squad_v2.3"
+DEFAULT_MAX_LEN = 4096  # fallback when tokenizer's model_max_length is missing
+DEFAULT_STRIDE = 1024
+
 label_to_question = {
     "Model": "What is the name of the proposed model?",
 }
@@ -13,7 +17,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
 
-def qa_squad(article: str, label: str, model: str="deepset/deberta-v3-large-squad2") -> str:
+def qa_squad(article: str, label: str, model: str=MODEL_ID) -> str:
     """
     Calcule la heatmap des probas (marginale inside) + sauvegarde HTML,
     renvoie la réponse la plus probable et affiche les 10 meilleures dans le terminal.
@@ -73,8 +77,6 @@ def qa_squad(article: str, label: str, model: str="deepset/deberta-v3-large-squa
         return "".join(parts)
 
     # --- paramètres (simples, modifiables) ---
-    MAX_LEN   = 512
-    STRIDE    = 128
     LMAX      = 30    # longueur max de la réponse (en tokens du contexte)
     TOPK_SAVE = 100   # on retient jusqu'à 100 spans par fenêtre pour le mélange global
     TOPK_SHOW = 10
@@ -86,14 +88,24 @@ def qa_squad(article: str, label: str, model: str="deepset/deberta-v3-large-squa
     device = "cuda" if torch.cuda.is_available() else "cpu"
     net.to(device)
 
+    tokenizer_max_len = getattr(tok, "model_max_length", DEFAULT_MAX_LEN)
+    if isinstance(tokenizer_max_len, int) and tokenizer_max_len > 0:
+        max_length = tokenizer_max_len
+    else:
+        max_length = DEFAULT_MAX_LEN
+
+    stride = min(DEFAULT_STRIDE, max_length // 2) if max_length else DEFAULT_STRIDE
+    if stride <= 0:
+        stride = DEFAULT_STRIDE
+
     # --- encodage glissant sur tout l'article ---
     enc = tok(
         label, article,
         return_offsets_mapping=True,
         return_overflowing_tokens=True,
         truncation="only_second",
-        max_length=MAX_LEN,
-        stride=STRIDE,
+        max_length=max_length,
+        stride=stride,
         padding=False
     )
     n_chunks = len(enc["input_ids"])
@@ -190,7 +202,7 @@ def qa_squad(article: str, label: str, model: str="deepset/deberta-v3-large-squa
         slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:40] or "qa"
         out_path = f"qa_heatmap_{slug}.html"
         html_str = render_html(article, char_scores, top_list,
-                               meta_note=f"model={model}, max_len={MAX_LEN}, stride={STRIDE}, Lmax={LMAX} | (aucune réponse détectée)")
+                               meta_note=f"model={model}, max_len={max_length}, stride={stride}, Lmax={LMAX} | (aucune réponse détectée)")
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html_str)
         print("Aucune réponse détectée (p_no≈1 partout).")
@@ -238,7 +250,7 @@ def qa_squad(article: str, label: str, model: str="deepset/deberta-v3-large-squa
         article, char_scores,
         top_list,
         title="QA inside probability heatmap",
-        meta_note=f"model={model}, max_len={MAX_LEN}, stride={STRIDE}, Lmax={LMAX}"
+        meta_note=f"model={model}, max_len={max_length}, stride={stride}, Lmax={LMAX}"
     )
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_str)
