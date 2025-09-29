@@ -31,7 +31,7 @@ for i in range(1000):
     if os.path.exists(f"data/files/train/{i}.txt"):
         print(f"File {i}.txt exists")
         with open(f"data/files/train/{i}.txt", "r") as f:
-            (best, other) = qa_squad(f.read(), "what is the full name of the proposed model ? It's not in the references")
+            (best, other) = qa_squad(f.read(), "What is the name of the proposed model ?")
             data["Model_predicted"].append(best)
             data["other_predicted"].append(other)
             data["Model_true"].append(df.iloc[i]["Model"])
