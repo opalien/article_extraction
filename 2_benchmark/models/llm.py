@@ -7,6 +7,8 @@ import textwrap
 from typing import Dict, Tuple
 
 import torch
+from huggingface_hub.errors import GatedRepoError
+from requests import HTTPError
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers.pipelines import TextGenerationPipeline
 
@@ -14,6 +16,7 @@ MODEL_ID = os.environ.get("BENCHMARK_LLM_MODEL_ID", "gemma3:4b")
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
+FALLBACK_MODEL_ID = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
 # Map friendly aliases to actual Hugging Face repo ids.
 MODEL_ALIASES = {
@@ -21,6 +24,7 @@ MODEL_ALIASES = {
 }
 
 generators: Dict[str, TextGenerationPipeline] = {}
+failed_generators: Dict[str, Exception] = {}
 
 
 def _resolve_model_id(model_id: str) -> Tuple[str, bool]:
@@ -38,33 +42,64 @@ def _load_generator(model_id: str):
     """Lazily load and cache a text-generation pipeline for the requested model."""
     resolved_id, was_alias = _resolve_model_id(model_id)
 
-    cached = generators.get(resolved_id) or generators.get(model_id)
-    if cached is not None:
-        return cached
+    for candidate_id in [resolved_id, FALLBACK_MODEL_ID if resolved_id != FALLBACK_MODEL_ID and model_id == MODEL_ID else None]:
+        if candidate_id is None:
+            continue
 
-    tokenizer = AutoTokenizer.from_pretrained(resolved_id)
-    if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
-        tokenizer.pad_token = tokenizer.eos_token
+        if candidate_id in failed_generators:
+            continue
 
-    model = AutoModelForCausalLM.from_pretrained(resolved_id)
-    model.eval()
+        cached = generators.get(candidate_id)
+        if cached is not None:
+            if was_alias:
+                generators[model_id] = cached
+            return cached
 
-    if torch.cuda.is_available():
-        device = 0
-        model.to("cuda")
-    else:
-        device = -1
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(candidate_id)
+            if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+                tokenizer.pad_token = tokenizer.eos_token
 
-    gen = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer,
-        device=device,
+            model = AutoModelForCausalLM.from_pretrained(candidate_id)
+            model.eval()
+
+            if torch.cuda.is_available():
+                device = 0
+                model.to("cuda")
+            else:
+                device = -1
+
+            gen = pipeline(
+                "text-generation",
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+            )
+        except (GatedRepoError, HTTPError, OSError) as exc:
+            failed_generators[candidate_id] = exc
+            continue
+
+        generators[candidate_id] = gen
+        if was_alias or candidate_id != model_id:
+            generators[model_id] = gen
+
+        if candidate_id == FALLBACK_MODEL_ID and resolved_id != FALLBACK_MODEL_ID:
+            print(
+                "[llm] Falling back to", FALLBACK_MODEL_ID,
+                "(default model unavailable or gated)."
+            )
+        return gen
+
+    failure = failed_generators.get(resolved_id) or failed_generators.get(model_id)
+    if failure is not None:
+        raise RuntimeError(
+            "Unable to load language model."
+            " Please ensure you have access to the requested repository or set BENCHMARK_LLM_MODEL_ID"
+            " to an open model."
+        ) from failure
+    raise RuntimeError(
+        "Unable to load language model. Set BENCHMARK_LLM_MODEL_ID to an accessible Hugging Face repo."
     )
-    generators[resolved_id] = gen
-    if was_alias:
-        generators[model_id] = gen
-    return gen
 
 
 def _truncate_article(tokenizer, article: str, max_tokens: int) -> Tuple[str, bool]:
