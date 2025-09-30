@@ -16,6 +16,25 @@ MODEL_ID = "Qwen/Qwen3-8B"
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
+
+# Manual overrides for max context windows (prompt + generation) in tokens.
+MODEL_CONTEXT_OVERRIDES = {
+    "Qwen/Qwen3-8B": 100_000,
+    "Qwen/Qwen3-8B-Instruct": 100_000,
+    "qwen/qwen3-8b": 100_000,
+    "qwen/qwen3-8b-instruct": 100_000,
+    "Qwen/Qwen3-32B": 100_000,
+    "Qwen/Qwen3-32B-Instruct": 100_000,
+    "qwen/qwen3-32b": 100_000,
+    "qwen/qwen3-32b-instruct": 100_000,
+    "Qwen/Qwen2-8B": 100_000,
+    "Qwen/Qwen2-8B-Instruct": 100_000,
+    "qwen/qwen2-8b": 100_000,
+    "qwen/qwen2-8b-instruct": 100_000,
+    "Qwen8-8B": 100_000,
+    "qwen8-8b": 100_000,
+}
+
 generators: Dict[str, TextGenerationPipeline] = {}
 failed_generators: Dict[str, Exception] = {}
 
@@ -38,7 +57,7 @@ def _load_generator(model_id: str):
 
     if model_id in failed_generators:
         raise RuntimeError(
-            "Échec d’un chargement précédent du modèle Qwen/Qwen3-32B."
+            "Échec d’un chargement précédent du modèle Qwen/Qwen3-8B."
             " Assure-toi d’avoir les droits d’accès et une authentification Hugging Face valide."
         ) from failed_generators[model_id]
 
@@ -74,7 +93,7 @@ def _load_generator(model_id: str):
     except (GatedRepoError, HTTPError, OSError) as exc:
         failed_generators[model_id] = exc
         raise RuntimeError(
-            "Impossible de télécharger ou de charger Qwen/Qwen3-32B."
+            "Impossible de télécharger ou de charger Qwen/Qwen3-8B."
             " Vérifie que tu as accepté la licence du modèle et que ton jeton Hugging Face"
             " est configuré (variable HF_HUB_TOKEN ou connexion via huggingface_hub)."
         ) from exc
@@ -114,6 +133,18 @@ def _compute_article_token_budget(generator: TextGenerationPipeline) -> int:
                 value = getattr(config, name, None)
                 if isinstance(value, int) and 0 < value < 1_000_000:
                     candidates.append(int(value))
+
+    override_keys = {
+        MODEL_ID,
+        getattr(tokenizer, "name_or_path", ""),
+        getattr(model, "name_or_path", "") if model is not None else "",
+    }
+    for key in override_keys:
+        if not key:
+            continue
+        override = MODEL_CONTEXT_OVERRIDES.get(key) or MODEL_CONTEXT_OVERRIDES.get(key.lower())
+        if override:
+            candidates.append(int(override))
 
     if not candidates:
         max_context = DEFAULT_CONTEXT_TOKENS
