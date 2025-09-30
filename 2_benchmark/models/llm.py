@@ -106,6 +106,7 @@ def _load_generator(model_id: str):
             tokenizer=tokenizer,
         )
     except (GatedRepoError, HTTPError, OSError) as exc:
+        print((GatedRepoError, HTTPError, OSError))
         failed_generators[model_id] = exc
         raise RuntimeError(
             f"Impossible de télécharger ou de charger {model_id}."
