@@ -17,7 +17,10 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
 
+iii=0
+
 def qa_squad(article: str, label: str, model: str=MODEL_ID) -> str:
+    iii+=1
     """
     Calcule la heatmap des probas (marginale inside) + sauvegarde HTML,
     renvoie la réponse la plus probable et affiche les 10 meilleures dans le terminal.
@@ -200,7 +203,7 @@ def qa_squad(article: str, label: str, model: str=MODEL_ID) -> str:
         # Tout est no-answer : on écrit quand même l'HTML (vide) et on sort
         top_list = []
         slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:40] or "qa"
-        out_path = f"qa_heatmap_{slug}.html"
+        out_path = f"qa_heatmap_{slug}_{iii}.html"
         html_str = render_html(article, char_scores, top_list,
                                meta_note=f"model={model}, max_len={max_length}, stride={stride}, Lmax={LMAX} | (aucune réponse détectée)")
         with open(out_path, "w", encoding="utf-8") as f:
@@ -245,7 +248,7 @@ def qa_squad(article: str, label: str, model: str=MODEL_ID) -> str:
     mx = float(char_scores.max().item())
     if mx > 0: char_scores = char_scores / mx
     slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:40] or "qa"
-    out_path = f"qa_heatmap_{slug}.html"
+    out_path = f"qa_heatmap_{slug}_{iii}.html"
     html_str = render_html(
         article, char_scores,
         top_list,

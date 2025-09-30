@@ -7,6 +7,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
 
 MODEL_ID = "FredNajjar/bigbird-QA-squad_v2.3"
+i=0
 
 # ---------- petits helpers UI ----------
 def split_words(text: str):
