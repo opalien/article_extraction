@@ -182,9 +182,14 @@ def _build_prompt(article: str, question: str, truncated: bool) -> str:
 
         Question: {question}
 
-        Please respond using exactly two labeled lines:
-        predicted: <short answer>
-        thinking: <brief justification or cite 'insufficient evidence'>
+        Respond using a single line formatted exactly as:
+        predicted: <answer>
+
+        Requirements for <answer>:
+        - Copy the shortest span from the article that answers the question.
+        - Provide only the essential noun phrase, number, or proper noun (no full sentences).
+        - Do not add commentary, units that are not in the article, or extra words.
+        - If the answer is not present, output the literal word "unknown".
         """
     ).strip()
     return template.format(note=note, article=article, question=question)
@@ -192,17 +197,15 @@ def _build_prompt(article: str, question: str, truncated: bool) -> str:
 
 def _parse_response(text: str) -> Tuple[str, str]:
     predicted = ""
-    thinking = ""
     for raw_line in text.splitlines():
         line = raw_line.strip()
         lower = line.lower()
         if lower.startswith("predicted:") and not predicted:
             predicted = line.split(":", 1)[1].strip()
-        elif lower.startswith("thinking:") and not thinking:
-            thinking = line.split(":", 1)[1].strip()
     if not predicted:
         predicted = text.strip()
-    return predicted, thinking
+    predicted = predicted.strip().strip("\"'").strip()
+    return predicted, ""
 
 
 def llm(article: str, label: str, model: str = MODEL_ID) -> Tuple[str, str]:
