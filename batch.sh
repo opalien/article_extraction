@@ -19,7 +19,7 @@ BATCH_HIST="batch.txt"
 
 
 
-CMD=$"sh 1_download/run_all.sh"
+CMD=$"srun sh 1_download/run_all.sh"
 
 echo "start"
 ml python/3.12
