@@ -12,7 +12,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers import BitsAndBytesConfig
 from transformers.pipelines import TextGenerationPipeline
 
-MODEL_ID = "Qwen/Qwen3-32B"
+MODEL_ID = "Qwen/Qwen3-8B"
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
