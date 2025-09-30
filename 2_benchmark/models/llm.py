@@ -9,6 +9,7 @@ import torch
 from huggingface_hub.errors import GatedRepoError
 from requests import HTTPError
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import BitsAndBytesConfig
 from transformers.pipelines import TextGenerationPipeline
 
 MODEL_ID = "Qwen/Qwen3-32B"
@@ -44,8 +45,19 @@ def _load_generator(model_id: str):
     try:
         load_kwargs = {"trust_remote_code": True}
         if torch.cuda.is_available():
-            load_kwargs["torch_dtype"] = _select_cuda_dtype()
             load_kwargs["device_map"] = "auto"
+
+            try:
+                compute_dtype = _select_cuda_dtype()
+                quant_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=compute_dtype,
+                )
+                load_kwargs["quantization_config"] = quant_config
+            except Exception:
+                load_kwargs["dtype"] = _select_cuda_dtype()
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
         if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
@@ -178,8 +190,6 @@ def llm(article: str, label: str, model: str = MODEL_ID) -> Tuple[str, str]:
         prompt,
         max_new_tokens=MAX_NEW_TOKENS,
         do_sample=False,
-        temperature=0.2,
-        top_p=0.9,
         return_full_text=False,
         pad_token_id=tokenizer.pad_token_id,
     )
