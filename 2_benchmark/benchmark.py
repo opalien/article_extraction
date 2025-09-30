@@ -15,9 +15,9 @@ algorithms = {
 #        "Training hardware": lambda f: qa_squad(f, "what is the hardware on which the proposed model was trained ?", "FredNajjar/bigbird-QA-squad_v2.3"),
 #    },
     "llm": {
-        "Model": lambda f: llm(f, "what is the name of the proposed model ? (respond with the name only)"),
-        "Parameters": lambda f: llm(f, "what is the number of parameters of the proposed model ? (respond with the number only)"),
-        "Training hardware": lambda f: llm(f, "what is the hardware on which the proposed model was trained ? (respond with the hardware name only)"),
+        "Model": lambda f: llm(f, "what is the name of the proposed model ? (respond with the name only < 8 words)"),
+        "Parameters": lambda f: llm(f, "what is the number of parameters of the proposed model ? (respond with the unit number only)"),
+        "Training hardware": lambda f: llm(f, "what is the hardware on which the proposed model was trained ? (respond with the hardware name only < 8 words)"),
     }
 }
 
