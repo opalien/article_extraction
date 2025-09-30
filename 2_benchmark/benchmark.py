@@ -59,38 +59,51 @@ os.makedirs("2_benchmark/results", exist_ok=True)
 #} for key in keys}
 
 
-results = {algorithm: {key: {
-    "true": [],
-    "predicted": [],
-    "other": []
-} for key in algorithms[algorithm].keys()} for algorithm in algorithms}
+num_rows = len(df)
 
-for i in range(len(df)):
-    for algorithm in algorithms:
-        for key in algorithms[algorithm].keys():
-            results[algorithm][key]["true"].append(df.iloc[i][key])
+results = {}
+for algorithm, algo_keys in algorithms.items():
+    results[algorithm] = {}
+    for key in algo_keys.keys():
+        results[algorithm][key] = {
+            "true": [""] * num_rows,
+            "predicted": [""] * num_rows,
+            "other": [""] * num_rows,
+        }
+
+for i in range(num_rows):
+    row = df.iloc[i]
+    for algorithm, algo_keys in algorithms.items():
+        for key, func in algo_keys.items():
+            results[algorithm][key]["true"][i] = row.get(key, "")
             if os.path.exists(f"data/files/train/{i}.txt"):
                 with open(f"data/files/train/{i}.txt", "r") as f:
-                    output = algorithms[algorithm][key](f.read())
-                    results[algorithm][key]["predicted"].append(output[0])
-                    results[algorithm][key]["other"].append(output[1])
+                    output = func(f.read())
+                predicted = ""
+                other = ""
+                if isinstance(output, (list, tuple)):
+                    if len(output) > 0:
+                        predicted = output[0]
+                    if len(output) > 1:
+                        other = output[1]
+                else:
+                    predicted = output
+                results[algorithm][key]["predicted"][i] = predicted
+                results[algorithm][key]["other"][i] = other
             else:
-                results[algorithm][key]["predicted"].append("")
-                results[algorithm][key]["other"].append("")
-            
+                results[algorithm][key]["predicted"][i] = ""
+                results[algorithm][key]["other"][i] = ""
+
             res_per_algo_key = pd.DataFrame(results[algorithm][key])
             res_per_algo_key.to_csv(f"2_benchmark/results/{algorithm}_{key}.csv", index=False)
 
-            #keys = [f"{key}_{suffix}" for key in keys for suffix in ("true", "predicted")]
+        res_per_algo = {}
+        for algo_key, data in results[algorithm].items():
+            res_per_algo[f"{algo_key}_true"] = data["true"]
+            res_per_algo[f"{algo_key}_predicted"] = data["predicted"]
 
-
-            res_per_algo = {}
-            for key in results[algorithm].keys():
-                res_per_algo[key+"_true"] = results[algorithm][key]["true"]
-                res_per_algo[key+"_predicted"] = results[algorithm][key]["predicted"]
-            
-            res_per_algo = pd.DataFrame(res_per_algo)
-            res_per_algo.to_csv(f"2_benchmark/results/{algorithm}.csv", index=False)
+        res_per_algo = pd.DataFrame(res_per_algo)
+        res_per_algo.to_csv(f"2_benchmark/results/{algorithm}.csv", index=False)
 
 
             
