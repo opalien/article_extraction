@@ -21,6 +21,7 @@ algorithms = {
 
 
 df = pd.read_csv("data/tables/train.csv")
+os.makedirs("2_benchmark/results", exist_ok=True)
 
 #data = {
 #    "Model_predicted": [],
