@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import textwrap
 from typing import Dict, Tuple
 
@@ -12,94 +11,64 @@ from requests import HTTPError
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers.pipelines import TextGenerationPipeline
 
-MODEL_ID = os.environ.get("BENCHMARK_LLM_MODEL_ID", "gemma3:4b")
+MODEL_ID = "Qwen/Qwen3-32B"
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
-FALLBACK_MODEL_ID = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-
-# Map friendly aliases to actual Hugging Face repo ids.
-MODEL_ALIASES = {
-    "gemma3:4b": "google/gemma-2-2b-it",
-}
-
 generators: Dict[str, TextGenerationPipeline] = {}
 failed_generators: Dict[str, Exception] = {}
 
 
-def _resolve_model_id(model_id: str) -> Tuple[str, bool]:
-    """Return a valid Hugging Face repo id along with a flag indicating alias usage."""
-    if model_id in MODEL_ALIASES:
-        return MODEL_ALIASES[model_id], True
-
-    resolved = model_id
-    if ":" in resolved:
-        resolved = resolved.replace(":", "-")
-    return resolved, resolved != model_id
+def _select_cuda_dtype() -> torch.dtype:
+    if not torch.cuda.is_available():
+        return torch.float32
+    try:
+        if torch.cuda.is_bf16_supported():
+            return torch.bfloat16
+    except AttributeError:
+        pass
+    return torch.float16
 
 
 def _load_generator(model_id: str):
-    """Lazily load and cache a text-generation pipeline for the requested model."""
-    resolved_id, was_alias = _resolve_model_id(model_id)
+    """Charge ou récupère du cache le pipeline text-generation pour le modèle demandé."""
+    if model_id in generators:
+        return generators[model_id]
 
-    for candidate_id in [resolved_id, FALLBACK_MODEL_ID if resolved_id != FALLBACK_MODEL_ID and model_id == MODEL_ID else None]:
-        if candidate_id is None:
-            continue
-
-        if candidate_id in failed_generators:
-            continue
-
-        cached = generators.get(candidate_id)
-        if cached is not None:
-            if was_alias:
-                generators[model_id] = cached
-            return cached
-
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(candidate_id)
-            if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
-                tokenizer.pad_token = tokenizer.eos_token
-
-            model = AutoModelForCausalLM.from_pretrained(candidate_id)
-            model.eval()
-
-            if torch.cuda.is_available():
-                device = 0
-                model.to("cuda")
-            else:
-                device = -1
-
-            gen = pipeline(
-                "text-generation",
-                model=model,
-                tokenizer=tokenizer,
-                device=device,
-            )
-        except (GatedRepoError, HTTPError, OSError) as exc:
-            failed_generators[candidate_id] = exc
-            continue
-
-        generators[candidate_id] = gen
-        if was_alias or candidate_id != model_id:
-            generators[model_id] = gen
-
-        if candidate_id == FALLBACK_MODEL_ID and resolved_id != FALLBACK_MODEL_ID:
-            print(
-                "[llm] Falling back to", FALLBACK_MODEL_ID,
-                "(default model unavailable or gated)."
-            )
-        return gen
-
-    failure = failed_generators.get(resolved_id) or failed_generators.get(model_id)
-    if failure is not None:
+    if model_id in failed_generators:
         raise RuntimeError(
-            "Unable to load language model."
-            " Please ensure you have access to the requested repository or set BENCHMARK_LLM_MODEL_ID"
-            " to an open model."
-        ) from failure
-    raise RuntimeError(
-        "Unable to load language model. Set BENCHMARK_LLM_MODEL_ID to an accessible Hugging Face repo."
-    )
+            "Échec d’un chargement précédent du modèle Qwen/Qwen3-32B."
+            " Assure-toi d’avoir les droits d’accès et une authentification Hugging Face valide."
+        ) from failed_generators[model_id]
+
+    try:
+        load_kwargs = {"trust_remote_code": True}
+        if torch.cuda.is_available():
+            load_kwargs["torch_dtype"] = _select_cuda_dtype()
+            load_kwargs["device_map"] = "auto"
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
+        model.eval()
+
+        gen = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+        )
+    except (GatedRepoError, HTTPError, OSError) as exc:
+        failed_generators[model_id] = exc
+        raise RuntimeError(
+            "Impossible de télécharger ou de charger Qwen/Qwen3-32B."
+            " Vérifie que tu as accepté la licence du modèle et que ton jeton Hugging Face"
+            " est configuré (variable HF_HUB_TOKEN ou connexion via huggingface_hub)."
+        ) from exc
+
+    generators[model_id] = gen
+    return gen
 
 
 def _truncate_article(tokenizer, article: str, max_tokens: int) -> Tuple[str, bool]:
