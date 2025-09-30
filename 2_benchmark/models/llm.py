@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from typing import Dict, Tuple
 
@@ -57,9 +58,15 @@ def _load_generator(model_id: str):
 
     if model_id in failed_generators:
         raise RuntimeError(
-            "Échec d’un chargement précédent du modèle Qwen/Qwen3-8B."
+            f"Échec d’un chargement précédent du modèle {model_id}."
             " Assure-toi d’avoir les droits d’accès et une authentification Hugging Face valide."
         ) from failed_generators[model_id]
+
+    auth_token = (
+        os.getenv("HF_HUB_TOKEN")
+        or os.getenv("HUGGINGFACE_HUB_TOKEN")
+        or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+    )
 
     try:
         load_kwargs = {"trust_remote_code": True}
@@ -78,11 +85,19 @@ def _load_generator(model_id: str):
             except Exception:
                 load_kwargs["dtype"] = _select_cuda_dtype()
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+            token=auth_token,
+        )
         if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            token=auth_token,
+            **load_kwargs,
+        )
         model.eval()
 
         gen = pipeline(
@@ -93,9 +108,9 @@ def _load_generator(model_id: str):
     except (GatedRepoError, HTTPError, OSError) as exc:
         failed_generators[model_id] = exc
         raise RuntimeError(
-            "Impossible de télécharger ou de charger Qwen/Qwen3-8B."
+            f"Impossible de télécharger ou de charger {model_id}."
             " Vérifie que tu as accepté la licence du modèle et que ton jeton Hugging Face"
-            " est configuré (variable HF_HUB_TOKEN ou connexion via huggingface_hub)."
+            " est configuré (HF_HUB_TOKEN ou huggingface-cli login)."
         ) from exc
 
     generators[model_id] = gen
