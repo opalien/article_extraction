@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from typing import Dict, Tuple
 
@@ -9,24 +10,43 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers.pipelines import TextGenerationPipeline
 
-MODEL_ID = "gemma3:4b"
+MODEL_ID = os.environ.get("BENCHMARK_LLM_MODEL_ID", "gemma3:4b")
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
 
+# Map friendly aliases to actual Hugging Face repo ids.
+MODEL_ALIASES = {
+    "gemma3:4b": "google/gemma-2-2b-it",
+}
+
 generators: Dict[str, TextGenerationPipeline] = {}
+
+
+def _resolve_model_id(model_id: str) -> Tuple[str, bool]:
+    """Return a valid Hugging Face repo id along with a flag indicating alias usage."""
+    if model_id in MODEL_ALIASES:
+        return MODEL_ALIASES[model_id], True
+
+    resolved = model_id
+    if ":" in resolved:
+        resolved = resolved.replace(":", "-")
+    return resolved, resolved != model_id
 
 
 def _load_generator(model_id: str):
     """Lazily load and cache a text-generation pipeline for the requested model."""
-    if model_id in generators:
-        return generators[model_id]
+    resolved_id, was_alias = _resolve_model_id(model_id)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    cached = generators.get(resolved_id) or generators.get(model_id)
+    if cached is not None:
+        return cached
+
+    tokenizer = AutoTokenizer.from_pretrained(resolved_id)
     if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(resolved_id)
     model.eval()
 
     if torch.cuda.is_available():
@@ -35,13 +55,16 @@ def _load_generator(model_id: str):
     else:
         device = -1
 
-    generators[model_id] = pipeline(
+    gen = pipeline(
         "text-generation",
         model=model,
         tokenizer=tokenizer,
         device=device,
     )
-    return generators[model_id]
+    generators[resolved_id] = gen
+    if was_alias:
+        generators[model_id] = gen
+    return gen
 
 
 def _truncate_article(tokenizer, article: str, max_tokens: int) -> Tuple[str, bool]:
