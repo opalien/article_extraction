@@ -12,27 +12,27 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers import BitsAndBytesConfig
 from transformers.pipelines import TextGenerationPipeline
 
-MODEL_ID = "Qwen/Qwen3-8B"
+MODEL_ID = "Qwen/Qwen3-13B-Instruct"
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
 
 # Manual overrides for max context windows (prompt + generation) in tokens.
 MODEL_CONTEXT_OVERRIDES = {
-    "Qwen/Qwen3-8B": 100_000,
-    "Qwen/Qwen3-8B-Instruct": 100_000,
-    "qwen/qwen3-8b": 100_000,
-    "qwen/qwen3-8b-instruct": 100_000,
-    "Qwen/Qwen3-32B": 100_000,
-    "Qwen/Qwen3-32B-Instruct": 100_000,
-    "qwen/qwen3-32b": 100_000,
-    "qwen/qwen3-32b-instruct": 100_000,
-    "Qwen/Qwen2-8B": 100_000,
-    "Qwen/Qwen2-8B-Instruct": 100_000,
-    "qwen/qwen2-8b": 100_000,
-    "qwen/qwen2-8b-instruct": 100_000,
-    "Qwen8-8B": 100_000,
-    "qwen8-8b": 100_000,
+    "Qwen/Qwen3-13B": 100_000,
+    "Qwen/Qwen3-13B-Instruct": 100_000,
+#    "qwen/qwen3-8b": 100_000,
+#    "qwen/qwen3-8b-instruct": 100_000,
+#    "Qwen/Qwen3-32B": 100_000,
+#    "Qwen/Qwen3-32B-Instruct": 100_000,
+#    "qwen/qwen3-32b": 100_000,
+#    "qwen/qwen3-32b-instruct": 100_000,
+#    "Qwen/Qwen2-8B": 100_000,
+#    "Qwen/Qwen2-8B-Instruct": 100_000,
+#    "qwen/qwen2-8b": 100_000,
+#    "qwen/qwen2-8b-instruct": 100_000,
+#    "Qwen8-8B": 100_000,
+#    "qwen8-8b": 100_000,
 }
 
 generators: Dict[str, TextGenerationPipeline] = {}
@@ -182,14 +182,9 @@ def _build_prompt(article: str, question: str, truncated: bool) -> str:
 
         Question: {question}
 
-        Respond using a single line formatted exactly as:
-        predicted: <answer>
-
-        Requirements for <answer>:
-        - Copy the shortest span from the article that answers the question.
-        - Provide only the essential noun phrase, number, or proper noun (no full sentences).
-        - Do not add commentary, units that are not in the article, or extra words.
-        - If the answer is not present, output the literal word "unknown".
+        Please respond using exactly two labeled lines:
+        predicted: <few words answer>
+        thinking: <brief justification or cite 'insufficient evidence' in few words>
         """
     ).strip()
     return template.format(note=note, article=article, question=question)
@@ -197,15 +192,17 @@ def _build_prompt(article: str, question: str, truncated: bool) -> str:
 
 def _parse_response(text: str) -> Tuple[str, str]:
     predicted = ""
+    thinking = ""
     for raw_line in text.splitlines():
         line = raw_line.strip()
         lower = line.lower()
         if lower.startswith("predicted:") and not predicted:
             predicted = line.split(":", 1)[1].strip()
+        elif lower.startswith("thinking:") and not thinking:
+            thinking = line.split(":", 1)[1].strip()
     if not predicted:
         predicted = text.strip()
-    predicted = predicted.strip().strip("\"'").strip()
-    return predicted, ""
+    return predicted, thinking
 
 
 def llm(article: str, label: str, model: str = MODEL_ID) -> Tuple[str, str]:
