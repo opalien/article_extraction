@@ -13,7 +13,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers import BitsAndBytesConfig
 from transformers.pipelines import TextGenerationPipeline
 
-MODEL_ID = "google/gemma-3-12b-it"
+MODEL_ID = "google/gemma-3-4b-it"
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
@@ -22,6 +22,7 @@ PROMPT_OVERHEAD_TOKENS = 256
 MODEL_CONTEXT_OVERRIDES = {
     "Qwen/Qwen3-8B": 100_000,
     "google/gemma-3-12b-it": 100_000,
+    "google/gemma-3-4b-it": 100_000,
 #    "Qwen/Qwen3-13B-Instruct": 100_000,
 #    "qwen/qwen3-8b": 100_000,
 #    "qwen/qwen3-8b-instruct": 100_000,
@@ -199,33 +200,25 @@ def _build_prompt(article: str, question: str, truncated: bool) -> str:
 
         Question: {question}
 
-        Please respond using exactly two labeled lines:
-        predicted: <few words answer>
-        thinking: <brief justification or cite 'insufficient evidence' in few words>
+        Respond with the answer only and keep it under ten words.
         """
     ).strip()
     return template.format(note=note, article=article, question=question)
 
 
 def _parse_response(text: str) -> Tuple[str, str]:
-    predicted = ""
-    thinking = ""
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        lower = line.lower()
-        if lower.startswith("predicted:") and not predicted:
-            predicted = line.split(":", 1)[1].strip()
-        elif lower.startswith("thinking:") and not thinking:
-            thinking = line.split(":", 1)[1].strip()
-    if not predicted:
-        predicted = text.strip()
-    return predicted, thinking
+    stripped = text.strip()
+    if not stripped:
+        return "", ""
+
+    first_line = stripped.splitlines()[0].strip()
+    return first_line, ""
 
 
 def llm(article: str, label: str, model: str = MODEL_ID) -> Tuple[str, str]:
     """Answer a question about an article using a causal LLM.
 
-    Returns a tuple (predicted, other) where other contains the reasoning segment.
+    Returns a tuple (predicted, other); other is currently unused.
     """
     generator = _load_generator(model)
     tokenizer = generator.tokenizer
