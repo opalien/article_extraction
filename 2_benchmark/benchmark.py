@@ -18,6 +18,14 @@ algorithms = {
         "Model": lambda f: llm(f, "what is the name of the proposed model ? (respond with the name only < 8 words)"),
         "Parameters": lambda f: llm(f, "what is the number of parameters of the proposed model ? (respond with the unit number only)"),
         "Training hardware": lambda f: llm(f, "what is the hardware on which the proposed model was trained ? (respond with the hardware name only < 8 words)"),
+        "Country (of organization)": lambda f: llm(
+            f,
+            "In which country is the organization behind the proposed model located? Respond with country names only, comma-separated if multiple, no extra text.",
+        ),
+        "Training time (hours)": lambda f: llm(
+            f,
+            "How many hours did it take to train the proposed model? Respond with the numeric value in hours only, or 'unknown' if not stated.",
+        ),
     }
 }
 
