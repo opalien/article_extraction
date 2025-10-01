@@ -121,18 +121,19 @@ def _load_generator(model_id: str):
     return gen
 
 
-def _truncate_article(tokenizer, article: str, max_tokens: int) -> Tuple[str, bool]:
+def _truncate_article(tokenizer, article: str, max_tokens: int) -> Tuple[str, bool, int]:
     """Keep the prompt within the model context window while preserving the extremities."""
     tokens = tokenizer.encode(article, add_special_tokens=False)
-    if len(tokens) <= max_tokens:
-        return article, False
+    token_count = len(tokens)
+    if token_count <= max_tokens:
+        return article, False, token_count
 
     half = max(1, max_tokens // 2)
     prefix = tokenizer.decode(tokens[:half], skip_special_tokens=True).strip()
     suffix = tokenizer.decode(tokens[-half:], skip_special_tokens=True).strip()
     placeholder = "\n\n[...truncated for context budget...]\n\n"
     truncated = prefix + placeholder + suffix
-    return truncated, True
+    return truncated, True, token_count
 
 
 def _compute_article_token_budget(generator: TextGenerationPipeline) -> int:
@@ -225,7 +226,10 @@ def llm(article: str, label: str, model: str = MODEL_ID) -> Tuple[str, str]:
     tokenizer = generator.tokenizer
 
     limit = _compute_article_token_budget(generator)
-    context, truncated = _truncate_article(tokenizer, article, limit)
+    context, truncated, original_tokens = _truncate_article(tokenizer, article, limit)
+    print(
+        f"[llm] article tokens={original_tokens} (budget={limit}, truncated={'yes' if truncated else 'no'})"
+    )
     prompt = _build_prompt(context, label, truncated)
 
     outputs = generator(
