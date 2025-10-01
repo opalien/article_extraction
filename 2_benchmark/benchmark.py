@@ -41,6 +41,7 @@ for algorithm, algo_keys in algorithms.items():
         }
 
 for i in range(num_rows):
+    print(f"Processing row {i}")
     row = df.iloc[i]
     for algorithm, algo_keys in algorithms.items():
         for key, func in algo_keys.items():
