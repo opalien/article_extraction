@@ -13,14 +13,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers import BitsAndBytesConfig
 from transformers.pipelines import TextGenerationPipeline
 
-MODEL_ID = "Qwen/Qwen3-14B"
+MODEL_ID = "Qwen/Qwen3-8B"
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
 
 # Manual overrides for max context windows (prompt + generation) in tokens.
 MODEL_CONTEXT_OVERRIDES = {
-    "Qwen/Qwen3-14B": 100_000,
+    "Qwen/Qwen3-8B": 100_000,
 #    "Qwen/Qwen3-13B-Instruct": 100_000,
 #    "qwen/qwen3-8b": 100_000,
 #    "qwen/qwen3-8b-instruct": 100_000,
