@@ -14,11 +14,12 @@
 # export TMPDIR=/scratch/<project>/tmp
 
 
+
 BATCH_HIST="batch.txt"
 
 
 
-CMD=$"srun sh 1_download/run_all.sh"
+CMD=$"srun python -m 2_benchmark.benchmark"
 
 echo "start"
 ml python/3.12

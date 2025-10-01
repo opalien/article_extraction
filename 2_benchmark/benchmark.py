@@ -9,11 +9,21 @@ import torch
 print("cuda" if torch.cuda.is_available() else "cpu")
 
 algorithms = {
-#    "big_bird": {
-#        "Model": lambda f: qa_squad(f, "what is the name of the proposed model ?", "FredNajjar/bigbird-QA-squad_v2.3"),
-#        "Parameters": lambda f: qa_squad(f, "what is the number of parameters of the proposed model ?", "FredNajjar/bigbird-QA-squad_v2.3"),
-#        "Training hardware": lambda f: qa_squad(f, "what is the hardware on which the proposed model was trained ?", "FredNajjar/bigbird-QA-squad_v2.3"),
-#    },
+    "big_bird": {
+        "Model": lambda f: qa_squad(f, "what is the name of the proposed model ?", "FredNajjar/bigbird-QA-squad_v2.3"),
+        "Parameters": lambda f: qa_squad(f, "what is the number of parameters of the proposed model ?", "FredNajjar/bigbird-QA-squad_v2.3"),
+        "Training hardware": lambda f: qa_squad(f, "what is the hardware on which the proposed model was trained ?", "FredNajjar/bigbird-QA-squad_v2.3"),
+        "Country (of organization)": lambda f: qa_squad(
+            f,
+            "In which country is the organization behind the proposed model located?",
+            "FredNajjar/bigbird-QA-squad_v2.3",
+        ),
+        "Training time (hours)": lambda f: qa_squad(
+            f,
+            "How many hours did it take to train the proposed model?",
+            "FredNajjar/bigbird-QA-squad_v2.3",
+        ),
+    },
     "llm": {
         "Model": lambda f: llm(f, "what is the name of the proposed model ? (respond with the name only < 8 words)"),
         "Parameters": lambda f: llm(f, "what is the number of parameters of the proposed model ? (respond with the unit number only)"),
