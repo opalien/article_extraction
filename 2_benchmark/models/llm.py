@@ -13,7 +13,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from transformers import BitsAndBytesConfig
 from transformers.pipelines import TextGenerationPipeline
 
-MODEL_ID = "google/gemma-3-4b-it"
+MODEL_ID = "google/gemma-3n-E4B-it"
 DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
@@ -23,6 +23,7 @@ MODEL_CONTEXT_OVERRIDES = {
     "Qwen/Qwen3-8B": 100_000,
     "google/gemma-3-12b-it": 100_000,
     "google/gemma-3-4b-it": 100_000,
+    "google/gemma-3n-E4B-it": 32_000,
 #    "Qwen/Qwen3-13B-Instruct": 100_000,
 #    "qwen/qwen3-8b": 100_000,
 #    "qwen/qwen3-8b-instruct": 100_000,
