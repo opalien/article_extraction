@@ -10,6 +10,7 @@
 #SBATCH --error=hs_slurm/dcv_hist/err/slurm-%A_%a.txt
 #SBATCH --mail-type=ALL
 #SBATCH --requeue
+#SBATCH --gres=gpu:1
 
 # export TMPDIR=/scratch/<project>/tmp
 
