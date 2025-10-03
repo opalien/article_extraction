@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -58,14 +58,16 @@ def _infer_model_limit(model, tokenizer) -> Optional[int]:
     return min(candidates)
 
 
-def _resolve_dtype(name: str) -> torch.dtype:
+def _resolve_dtype(name: str) -> Optional[torch.dtype]:
     mapping = {
         "float16": torch.float16,
         "bfloat16": torch.bfloat16,
         "float32": torch.float32,
     }
+    if name == "auto":
+        return None
     if name not in mapping:
-        raise ValueError(f"Unsupported dtype '{name}'. Choose from {sorted(mapping)}")
+        raise ValueError(f"Unsupported dtype '{name}'. Choose from ['auto', 'bfloat16', 'float16', 'float32']")
     return mapping[name]
 
 
@@ -144,9 +146,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dtype",
-        default="float16",
-        choices=["float16", "bfloat16", "float32"],
-        help="Torch dtype to load the model with (default: float16)",
+        default="auto",
+        choices=["auto", "float16", "bfloat16", "float32"],
+        help="Torch dtype to load the model with. 'auto' laisse la quantisation par défaut du modèle",
     )
     parser.add_argument(
         "--min-tokens",
@@ -179,10 +181,29 @@ def main() -> None:
     print(f"Loading tokenizer: {args.model_id}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
 
+    load_kwargs = {}
+    if dtype is not None:
+        load_kwargs["torch_dtype"] = dtype
+
     print(f"Loading model: {args.model_id} (dtype={args.dtype})")
-    model = AutoModelForCausalLM.from_pretrained(args.model_id, torch_dtype=dtype)
+    model = AutoModelForCausalLM.from_pretrained(args.model_id, **load_kwargs)
     model.eval()
     model.to(device)
+
+    quant_config = getattr(model, "quantization_config", None)
+    if quant_config is None:
+        quant_config = getattr(model.config, "quantization_config", None)
+
+    if quant_config is not None:
+        try:
+            quant_info = quant_config.to_dict()  # type: ignore[union-attr]
+        except AttributeError:
+            quant_info = str(quant_config)
+        except Exception:
+            quant_info = repr(quant_config)
+        print(f"Quantization config détectée: {quant_info}")
+    else:
+        print("Quantization config détectée: aucune (précision pleine ou dépend du dtype spécifié)")
 
     model_limit = _infer_model_limit(model, tokenizer)
     upper_bound = 500_000
