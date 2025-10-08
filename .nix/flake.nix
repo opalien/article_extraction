@@ -38,7 +38,7 @@
       name = "pipzone";
 
       targetPkgs = pkgs: with pkgs; [
-        libgcc binutils coreutils
+        libgcc binutils coreutils zlib
         pythonEnv          # on y met directement notre python custom
       ];
 

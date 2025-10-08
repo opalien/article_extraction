@@ -96,6 +96,5 @@ for i in range(num_rows):
         res_per_algo.to_csv(f"2_benchmark/results/{algorithm}.csv", index=False)
 
     # save res as json
-    
     with open(f"2_benchmark/results/all_results.json", "w") as f:
         json.dump(results, f)

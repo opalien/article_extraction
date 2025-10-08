@@ -20,7 +20,7 @@ BATCH_HIST="batch.txt"
 
 
 
-CMD=$"srun python -m 2_benchmark.benchmark"
+CMD=$"srun python -m B_tables.main"
 
 echo "start"
 ml python/3.12
