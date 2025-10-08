@@ -18,7 +18,7 @@ from B_tables.models.qa_squad import extract_fn as qa_extract_fn
 from B_tables.tables import create_tables
 
 INFERENCE_RUNS = [
-#    ("paper_information_llm_train", llm_extract_fn, "LLM extractor"),
+    ("paper_information_llm_train", llm_extract_fn, "LLM extractor"),
     ("paper_information_qa_train", qa_extract_fn, "QA Squad extractor"),
 ]
 
