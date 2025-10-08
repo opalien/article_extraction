@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1               # nombre total de tâches sur tous les nœuds
 #SBATCH --cpus-per-task=1
 #SBATCH --time=48:00:00
-#SBATCH --mem=128G
+#SBATCH --mem=32G
 #SBATCH --output=hs_slurm/dcv_hist/out/slurm-%A_%a.txt
 #SBATCH --error=hs_slurm/dcv_hist/err/slurm-%A_%a.txt
 #SBATCH --mail-type=ALL
