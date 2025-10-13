@@ -1,9 +1,5 @@
-# "deepset/roberta-base-squad2"
-# "deepset/deberta-v3-large-squad2"
-# "deepset/deberta-v3-base-squad2"
-
 MODEL_ID = "FredNajjar/bigbird-QA-squad_v2.3"
-DEFAULT_MAX_LEN = 4096  # fallback when tokenizer's model_max_length is missing
+DEFAULT_MAX_LEN = 4096
 DEFAULT_STRIDE = 1024
 
 label_to_question = {
@@ -56,18 +52,12 @@ def _load_qa_model(model_id: str = MODEL_ID) -> Tuple[AutoTokenizer, AutoModelFo
 
 
 def qa_squad(article: str, label: str, model: str = MODEL_ID) -> str:
-
-    """
-    Calcule la heatmap des probas (marginale inside) + sauvegarde HTML,
-    renvoie la réponse la plus probable et affiche les 10 meilleures dans le terminal.
-    """
-    # --- petites helpers ---
     def split_words(text: str):
         return list(re.finditer(r"\S+", text, flags=re.M))
 
     def rgba(alpha: float) -> str:
         alpha = max(0.0, min(1.0, float(alpha)))
-        return f"background-color: rgba(255,165,0,{alpha});"  # orange
+        return f"background-color: rgba(255,165,0,{alpha});"
 
     def render_html(text, char_scores, top_spans, title="QA heatmap (inside prob)", meta_note=""):
         parts = []
@@ -115,12 +105,10 @@ def qa_squad(article: str, label: str, model: str = MODEL_ID) -> str:
         parts.append("</div>")
         return "".join(parts)
 
-    # --- paramètres (simples, modifiables) ---
-    LMAX      = 30    # longueur max de la réponse (en tokens du contexte)
-    TOPK_SAVE = 100   # on retient jusqu'à 100 spans par fenêtre pour le mélange global
+    LMAX = 30
+    TOPK_SAVE = 100
     TOPK_SHOW = 10
 
-    # --- modèle ---
     tok, net = _load_qa_model(model)
     net.eval()
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -136,7 +124,6 @@ def qa_squad(article: str, label: str, model: str = MODEL_ID) -> str:
     if stride <= 0:
         stride = DEFAULT_STRIDE
 
-    # --- encodage glissant sur tout l'article ---
     enc = tok(
         label, article,
         return_offsets_mapping=True,
@@ -148,13 +135,11 @@ def qa_squad(article: str, label: str, model: str = MODEL_ID) -> str:
     )
     n_chunks = len(enc["input_ids"])
     if n_chunks == 0:
-        print("Aucun chunk encodé.")
         return ""
 
-    # Agrégats globaux
-    char_scores = torch.zeros(len(article), dtype=torch.float32)          # heatmap par caractère (union proba)
-    win_weights = []                                                      # (1 - p_no) par fenêtre
-    partial_spans = []                                                    # liste d'entrées {w,start,end,q,score}
+    char_scores = torch.zeros(len(article), dtype=torch.float32)
+    win_weights = []
+    partial_spans = []
 
     for i in range(n_chunks):
         inputs = {
@@ -169,90 +154,89 @@ def qa_squad(article: str, label: str, model: str = MODEL_ID) -> str:
 
         seq_ids = enc.sequence_ids(i)
         offsets = enc["offset_mapping"][i]
-        # indices du contexte (tokens réellement mappés)
-        ctx_idx = [t for t,s in enumerate(seq_ids)
-                   if s == 1 and offsets[t] is not None and offsets[t][1] > offsets[t][0]]
+        ctx_idx = [
+            t
+            for t, s in enumerate(seq_ids)
+            if s == 1 and offsets[t] is not None and offsets[t][1] > offsets[t][0]
+        ]
         if not ctx_idx:
             win_weights.append(0.0)
             continue
 
-        s = start_logits[ctx_idx]  # (N,)
-        e = end_logits[ctx_idx]    # (N,)
+        s = start_logits[ctx_idx]
+        e = end_logits[ctx_idx]
         N = s.numel()
-        # matrice conjointe des spans
-        scores  = s[:, None] + e[None, :]                   # (N,N)
+        scores = s[:, None] + e[None, :]
         ii = torch.arange(N)
         lenmask = (ii[None, :] - ii[:, None] + 1) <= LMAX
-        valid   = torch.triu(torch.ones_like(scores, dtype=torch.bool)) & lenmask
-        joint   = scores.masked_fill(~valid, float("-inf"))
+        valid = torch.triu(torch.ones_like(scores, dtype=torch.bool)) & lenmask
+        joint = scores.masked_fill(~valid, float("-inf"))
 
-        # normalisation avec no-answer (CLS = index 0 global)
         cls_score = start_logits[0] + end_logits[0]
         flat = torch.cat([joint[valid], cls_score.view(1)])
         Z = torch.logsumexp(flat, dim=0)
-        p_span = torch.exp(joint - Z)                       # (N,N) (somme = 1 - p_no)
-        p_no   = float(torch.exp(cls_score - Z))
-        mass   = float(1.0 - p_no)                          # masse totale allouée aux spans
+        p_span = torch.exp(joint - Z)
+        p_no = float(torch.exp(cls_score - Z))
+        mass = float(1.0 - p_no)
         win_weights.append(mass)
 
-        # inside marginale (fenêtre) pour heatmap, déjà pondérée par mass
-        inside = torch.stack([p_span[:k+1, k:].sum() for k in range(N)])  # (N,)
+        inside = torch.stack([p_span[:k + 1, k:].sum() for k in range(N)])
 
-        # projection aux caractères + union proba entre fenêtres
         for local_k, tok_k in enumerate(ctx_idx):
             st, ed = enc["offset_mapping"][i][tok_k]
             if ed > st:
-                val = float(inside[local_k])                # ∈ [0, mass]
-                # union proba: new = 1 - (1-prev)*(1-val)
+                val = float(inside[local_k])
                 prev = char_scores[st:ed]
                 char_scores[st:ed] = 1.0 - (1.0 - prev) * (1.0 - val)
 
-        # Sauver TOPK spans (conditionnels) pour le mélange global
         if mass > 0 and valid.any():
-            vals = p_span[valid]                            # (M,) somme = mass
+            vals = p_span[valid]
             M = vals.numel()
             k = min(TOPK_SAVE, M)
             topv, topi = torch.topk(vals, k)
-            # retrouver (i,j)
             ij = torch.nonzero(valid, as_tuple=False)[topi]
-            # proba conditionnelle donnée "il y a une réponse dans cette fenêtre"
             q = (topv / mass).tolist()
             for (ii_j, jj_j), qv, vprob in zip(ij.tolist(), q, topv.tolist()):
-                tok_i = ctx_idx[ii_j]; tok_j = ctx_idx[jj_j]
-                st_char, _  = enc["offset_mapping"][i][tok_i]
-                _, ed_char  = enc["offset_mapping"][i][tok_j]
-                if ed_char <= st_char: continue
-                # marge logit vs no-answer, utile pour tri secondaire
+                tok_i = ctx_idx[ii_j]
+                tok_j = ctx_idx[jj_j]
+                st_char, _ = enc["offset_mapping"][i][tok_i]
+                _, ed_char = enc["offset_mapping"][i][tok_j]
+                if ed_char <= st_char:
+                    continue
                 score_margin = float((s[ii_j] + e[jj_j] - cls_score).item())
-                partial_spans.append({
-                    "w": i,
-                    "start": int(st_char),
-                    "end": int(ed_char),
-                    "q": float(qv),          # P(span | réponse dans fenêtre i)
-                    "score": score_margin,   # marge logit
-                })
+                partial_spans.append(
+                    {
+                        "w": i,
+                        "start": int(st_char),
+                        "end": int(ed_char),
+                        "q": float(qv),
+                        "score": score_margin,
+                    }
+                )
 
-    # Mélange global entre fenêtres: pi_w ∝ (1 - p_no_w)
     W = sum(win_weights)
     if W <= 0:
-        # Tout est no-answer : on écrit quand même l'HTML (vide) et on sort
         top_list = []
         slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:40] or "qa"
         out_path = f"qa_heatmap_{slug}.html"
-        html_str = render_html(article, char_scores, top_list,
-                               meta_note=f"model={model}, max_len={max_length}, stride={stride}, Lmax={LMAX} | (aucune réponse détectée)")
+        html_str = render_html(
+            article,
+            char_scores,
+            top_list,
+            meta_note=(
+                f"model={model}, max_len={max_length}, stride={stride}, Lmax={LMAX} | "
+                "(aucune réponse détectée)"
+            ),
+        )
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html_str)
-        print("Aucune réponse détectée (p_no≈1 partout).")
-        print(f"HTML → {out_path}")
         return ""
 
-    pi = [w / W for w in win_weights]  # prior de fenêtre
+    pi = [w / W for w in win_weights]
 
-    # Aggrégation des spans par (start,end)
-    agg = {}  # (s,e) -> {"prob":..., "score":best_score}
+    agg = {}
     for sp in partial_spans:
-        pglob = pi[sp["w"]] * sp["q"]  # P(span) = pi_w * P(span | fenêtre w, réponse)
+        pglob = pi[sp["w"]] * sp["q"]
         key = (sp["start"], sp["end"])
         if key not in agg:
             agg[key] = {"prob": 0.0, "score": sp["score"]}
@@ -260,28 +244,25 @@ def qa_squad(article: str, label: str, model: str = MODEL_ID) -> str:
         if sp["score"] > agg[key]["score"]:
             agg[key]["score"] = sp["score"]
 
-    # Top K global
     spans_sorted = sorted(
-        [{"start": s, "end": e, "prob": v["prob"], "score": v["score"],
-          "text": article[s:e]} for (s,e), v in agg.items()],
+        [
+            {
+                "start": s,
+                "end": e,
+                "prob": v["prob"],
+                "score": v["score"],
+                "text": article[s:e],
+            }
+            for (s, e), v in agg.items()
+        ],
         key=lambda x: (x["prob"], x["score"]),
-        reverse=True
+        reverse=True,
     )
     top_list = spans_sorted[:TOPK_SHOW]
 
-    # Impression terminal
-    print("\nTop segments:")
-    if not top_list:
-        print("(vide)")
-    else:
-        for k, seg in enumerate(top_list, 1):
-            snip = re.sub(r"\s+", " ", seg["text"]).strip()
-            snip = textwrap.shorten(snip, width=160, placeholder="…")
-            print(f"{k:2d}. p≈{seg['prob']:.4f}  score={seg['score']:.2f}  [{seg['start']},{seg['end']})  {snip}")
-
-    # HTML heatmap (normalisation 0..1 pour affichage)
     mx = float(char_scores.max().item())
-    if mx > 0: char_scores = char_scores / mx
+    if mx > 0:
+        char_scores = char_scores / mx
     slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:40] or "qa"
     out_path = f"qa_heatmap_{slug}.html"
     html_str = render_html(
@@ -292,8 +273,6 @@ def qa_squad(article: str, label: str, model: str = MODEL_ID) -> str:
     )
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_str)
-    print(f"\nHTML → {out_path}")
 
-    # Réponse la plus probable (texte)
     best_answer = top_list[0]["text"] if top_list else ""
     return (best_answer, top_list)

@@ -1,58 +1,3 @@
-r"""Structure et définition de la table ``paper_information``.
-
-Le bloc LaTeX ci-dessous rappelle le cahier des charges original, conservé ici
-comme documentation de référence.
-
-\begin{table*}[htbp]
-\centering
-\caption{Tableau récapitulatif des modèles du dataset}
-\label{tab:dataset_summary}
-\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}} l|ccccc@{}}
-\hline
-\textbf{labels} & \textbf{\textcolor{blue}{Model}} & \textbf{\textcolor{blue}{Abstract}} & \textbf{\textcolor{blue}{Architecture}} & \textbf{Parameters} & \textbf{Country} \\
-\hline
-\textbf{Format} & Text & Text & ? & Num & Cat \\
-\hline
-\textbf{Unit} & -- & -- & -- & -- & -- \\
-\hline
-\textbf{Estimation} & -- & -- & -- & ? & -- \\
-\hline
-\textbf{Distance} & $d_{JW, rel}(F_{m+p}(.))$ & $d_{JW, rel}(F_{m+p}(.))$ & ? & $d_{rel}$ & $I_{\{id_1 = id_2\}}$ \\
-\hline
-\end{tabular*}
-
-\vspace{0.6em}
-\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}} l|ccccc@{}}
-\hline
-\textbf{labels} & \textbf{Hardware} & \textbf{H Compute} & \textbf{H Power} & \textbf{H Number} & \textbf{Training Time} \\
-\hline
-\textbf{Format} & Cat & Cat | Num & Cat | Num & Num & Cat \\
-\hline
-\textbf{Unit} & -- & FLOP & W & -- & h \\
-\hline
-\textbf{Estimation} & -- & Compute(TH) & Power(TH) & -- & ? \\
-\hline
-\textbf{Distance} & $I_{\{id_1 = id_2\}}$ & $d_{rel}$ & $d_{rel}$ & $d_{rel}$ & $d_{rel}$ \\
-\hline
-\end{tabular*}
-
-\vspace{0.6em}
-\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}} l|cccc@{}}
-\hline
-\textbf{labels} & \textbf{Year} & \textbf{\textcolor{red}{Training Compute}} & \textbf{\textcolor{orange}{Power Draw}} & \textbf{\textcolor{green}{CO$_2$eq}} \\
-\hline
-\textbf{Format} & Num & Num & Num & Num \\
-\hline
-\textbf{Unit} & year & FLOP & Wh & kg CO$_2$eq \\
-\hline
-\textbf{Estimation} & -- & TT*HN*HC*$\alpha$ & TT*HN*HP*PUE & co2/w(Country)*PD \\
-\hline
-\textbf{Distance} & $d_1$ & $d_{rel}$ & $d_{rel}$ & $d_{rel}$ \\
-\hline
-\end{tabular*}
-\end{table*}
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -70,8 +15,6 @@ from .base import Base, get_engine
 
 
 class PaperInformation(Base):
-    """ORM représentant une ligne de la table ``paper_information``."""
-
     __tablename__ = "paper_information"
 
     id_paper: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -100,8 +43,6 @@ class PaperInformation(Base):
 
 
 def _get_variant_table(name: str):
-    """Return the SQLAlchemy Table matching ``name`` (clone if needed)."""
-
     metadata = Base.metadata
     if name in metadata.tables:
         return metadata.tables[name]
@@ -436,20 +377,6 @@ def create_paper_information_tables(
     drop: bool = True,
     variant_sources: Mapping[str, str | Path] | None = None,
 ) -> None:
-    """Create the canonical ``paper_information`` table and optional variants.
-
-    Parameters
-    ----------
-    engine:
-        Database engine to use. When omitted, the project engine is created.
-    variants:
-        Iterable of additional table names to materialise. For example
-        ``["paper_information_true_train", "paper_information_pred_llm_train"]``.
-    drop:
-        When ``True`` (default) each table is dropped before being (re)created,
-        ensuring an empty dataset.
-    """
-
     engine = engine or get_engine()
     sources: dict[str, Path] = {}
     if variant_sources:

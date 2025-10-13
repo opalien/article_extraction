@@ -19,14 +19,9 @@ DEFAULT_PAPER_SOURCES: Mapping[str, Path] = {
     "paper_information_true_test": Path("data/tables/test.csv"),
 }
 
-
-
-
-
 def _ensure_models_loaded() -> None:
-    """Import ORM models so that metadata knows about every table."""
-
-    from . import country, hardware, paper_informations  # noqa: F401
+    from . import country, hardware, paper_informations
+    _ = (country, hardware, paper_informations)
 
 
 def create_tables(
@@ -37,32 +32,6 @@ def create_tables(
     paper_variant_sources: Mapping[str, str | Path] | None = None,
     drop_paper_tables: bool = True,
 ) -> Engine:
-    """Create (and optionally populate) every project table.
-
-    Parameters
-    ----------
-    engine
-        Optional pre-configured SQLAlchemy engine. When omitted a new engine
-        targeting ``DATABASE_URL`` is created.
-    populate
-        When ``True`` (default) the domain-specific modules are responsible
-        for dropping, recreating, and loading their respective tables. Passing
-        ``False`` only creates an empty schema without triggering data loads.
-    paper_variants
-        Extra ``paper_information``-like table names to materialise (e.g.
-        ``["paper_information_true_train", "paper_information_pred_llm_train"]``).
-        When omitted, ``paper_information_true_train`` et
-        ``paper_information_true_test`` sont créées par défaut.
-    paper_variant_sources
-        Optional mapping ``table_name -> csv_path`` used to seed the table. Par
-        défaut, les variantes ``paper_information_true_train`` et
-        ``paper_information_true_test`` sont alimentées depuis
-        ``data/tables/train.csv`` et ``data/tables/test.csv``.
-    drop_paper_tables
-        When ``True`` the paper tables are dropped prior to creation so that
-        each run starts with empty datasets.
-    """
-
     engine = engine or get_engine()
     if paper_variants is None:
         paper_variants = DEFAULT_PAPER_VARIANTS
@@ -99,8 +68,6 @@ def create_tables(
 
 
 def delete_tables(engine: Optional[Engine] = None) -> None:
-    """Drop every project table from the database."""
-
     engine = engine or get_engine()
     with engine.begin() as connection:
         metadata = MetaData()

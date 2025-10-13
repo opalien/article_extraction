@@ -38,7 +38,7 @@
       name = "pipzone";
 
       targetPkgs = pkgs: with pkgs; [
-        libgcc binutils coreutils zlib
+        stdenv.cc.cc.lib glibc libgcc binutils coreutils zlib
         pythonEnv          # on y met directement notre python custom
       ];
 
@@ -47,6 +47,8 @@
         # Lignes originales de shell.nix
         export LIBRARY_PATH=/usr/lib:/usr/lib64:$LIBRARY_PATH
         # export LIBRARY_PATH=${pkgs.libgcc}/lib
+        # Ajouter les libs C/C++ runtime au runtime dynamic linker (pour DBCode/Cursor)
+        export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.glibc pkgs.zlib ]}:$LD_LIBRARY_PATH
       '';
 
       runScript = "bash";

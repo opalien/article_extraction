@@ -24,8 +24,6 @@ class Country(Base):
 
 
 def _prepare_latest_country_frame(url: str) -> pd.DataFrame:
-    """Return the latest carbon intensity value per country."""
-
     df = pd.read_csv(url)
     df.rename(
         columns={
@@ -56,8 +54,6 @@ def refresh_country_table(
     *,
     url: str = URL,
 ) -> None:
-    """Drop, recreate, and repopulate the country table."""
-
     engine = engine or get_engine()
 
     latest_df = _prepare_latest_country_frame(url)
@@ -72,8 +68,6 @@ def refresh_country_table(
             for row in latest_df.to_dict("records")
         )
         session.commit()
-
-    print("Country table refreshed successfully")
 
 
 if __name__ == "__main__":

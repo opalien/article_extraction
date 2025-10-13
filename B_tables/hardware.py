@@ -40,8 +40,6 @@ class Hardware(Base):
 def _download_archive(
     source_url: str = SRC, *, cache_dir: Path = CACHE_DIR
 ) -> Path:
-    """Download the compressed hardware dataset into the cache directory."""
-
     cache_dir.mkdir(parents=True, exist_ok=True)
     archive_path = cache_dir / ARCHIVE_NAME
     if archive_path.exists():
@@ -50,7 +48,7 @@ def _download_archive(
     try:
         with urlopen(source_url) as response, archive_path.open("wb") as target:
             shutil.copyfileobj(response, target)
-    except URLError as exc:  # pragma: no cover - network restrictions handled at runtime
+    except URLError as exc:
         raise RuntimeError(
             "Unable to download hardware dataset. Provide the archive manually at"
             f" {archive_path}"
@@ -62,8 +60,6 @@ def _download_archive(
 def _extract_hardware_csv(
     archive_path: Path, *, data_dir: Path = DATA_DIR
 ) -> Path:
-    """Extract the hardware CSV from the archive, ignoring ancillary files."""
-
     data_dir.mkdir(parents=True, exist_ok=True)
     target_path = data_dir / "ml_hardware.csv"
 
@@ -167,7 +163,6 @@ def _prepare_hardware_frame(csv_path: Path) -> pd.DataFrame:
     )
 
     result = df[[hardware_col, compute_col, power_col]].copy()
-    # Normalize column names so downstream processing is deterministic.
     result.columns = ["hardware", "compute", "power"]
 
     result["hardware"] = result["hardware"].astype(str).str.strip()
@@ -186,8 +181,6 @@ def refresh_hardware_table(
     *,
     source_url: str = SRC,
 ) -> None:
-    """Drop, recreate, and populate the hardware table."""
-
     engine = engine or get_engine()
 
     archive_path = _download_archive(source_url)
@@ -213,8 +206,6 @@ def refresh_hardware_table(
     with Session(engine) as session:
         session.add_all(records)
         session.commit()
-
-    print("Hardware table refreshed successfully")
 
 
 if __name__ == "__main__":

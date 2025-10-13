@@ -50,9 +50,7 @@ SHORT_SUFFIX_MULTIPLIERS: dict[str, float] = {
 }
 
 
-def _parse_numeric(value: Any) -> float | None:
-    """Attempt to coerce model answers like "1.5B" or "42 million" into floats."""
-
+ def _parse_numeric(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -64,7 +62,6 @@ def _parse_numeric(value: Any) -> float | None:
     if not text:
         return None
 
-    # Handle compact suffixes such as 1.2b or 300k.
     suffix_match = re.match(r"([-+]?\d*\.?\d+)\s*([kmbt])\b", text)
     if suffix_match:
         base = float(suffix_match.group(1))
@@ -72,7 +69,6 @@ def _parse_numeric(value: Any) -> float | None:
         return base * SHORT_SUFFIX_MULTIPLIERS[suffix]
 
     cleaned = text.replace(",", "")
-    # Capture scientific notation or decimal numbers inside the string.
     number_match = re.search(r"[-+]?\d*\.?\d+(?:e[-+]?\d+)?", cleaned)
     if number_match:
         number = float(number_match.group())
@@ -85,8 +81,6 @@ def _parse_numeric(value: Any) -> float | None:
 
 
 def _coerce_value(value: Any, target_type: type) -> Any:
-    """Return ``value`` cast to ``target_type`` or ``None`` when not possible."""
-
     if value is None:
         return None
 
@@ -107,7 +101,6 @@ def _coerce_value(value: Any, target_type: type) -> Any:
         parsed = _parse_numeric(value)
         return int(parsed) if parsed is not None else None
 
-    # Fallback: try direct construction, silence conversion errors.
     try:
         return target_type(value)
     except (TypeError, ValueError):
@@ -137,13 +130,11 @@ class InfertInformation():
     def infer(self, extract_fn: Callable[[str, str], Any]) -> None:
         with Session(self.engine) as session:
             for file_content, id_paper, i, dir_name in self.dataset:
-                print(f"{i=}: Processing {dir_name}")
                 columns: dict[str, Any] = {}
                 for name in self.column_names[1:]:
                     res_brut = extract_fn(file_content, name)
                     res_typed = _coerce_value(res_brut, self._type_map[name])
                     columns[name] = res_typed
-                print(columns)
 
                 pk_name = self.column_names[0]
                 pk_column = self.table.c[pk_name]

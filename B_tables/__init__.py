@@ -1,5 +1,3 @@
-"""Utilities for managing paper information tables and related assets."""
-
 __all__ = [
     "main",
     "infer",
@@ -9,5 +7,4 @@ __all__ = [
     "hardware",
     "tables",
 ]
-
 

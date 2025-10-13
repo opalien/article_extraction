@@ -1,5 +1,3 @@
-"""Lightweight interface to run a causal LLM for question answering over long articles."""
-
 from __future__ import annotations
 
 import os
@@ -18,25 +16,11 @@ DEFAULT_CONTEXT_TOKENS = 3072
 MAX_NEW_TOKENS = 128
 PROMPT_OVERHEAD_TOKENS = 256
 
-# Manual overrides for max context windows (prompt + generation) in tokens.
 MODEL_CONTEXT_OVERRIDES = {
     "Qwen/Qwen3-8B": 100_000,
     "google/gemma-3-12b-it": 100_000,
     "google/gemma-3-4b-it": 100_000,
     "google/gemma-3n-E4B-it": 32_000,
-#    "Qwen/Qwen3-13B-Instruct": 100_000,
-#    "qwen/qwen3-8b": 100_000,
-#    "qwen/qwen3-8b-instruct": 100_000,
-#    "Qwen/Qwen3-32B": 100_000,
-#    "Qwen/Qwen3-32B-Instruct": 100_000,
-#    "qwen/qwen3-32b": 100_000,
-#    "qwen/qwen3-32b-instruct": 100_000,
-#    "Qwen/Qwen2-8B": 100_000,
-#    "Qwen/Qwen2-8B-Instruct": 100_000,
-#    "qwen/qwen2-8b": 100_000,
-#    "qwen/qwen2-8b-instruct": 100_000,
-#    "Qwen8-8B": 100_000,
-#    "qwen8-8b": 100_000,
 }
 
 
@@ -77,7 +61,6 @@ def _select_cuda_dtype() -> torch.dtype:
 
 
 def _load_generator(model_id: str):
-    """Charge ou récupère du cache le pipeline text-generation pour le modèle demandé."""
     if model_id in generators:
         return generators[model_id]
 
@@ -131,7 +114,6 @@ def _load_generator(model_id: str):
             tokenizer=tokenizer,
         )
     except (GatedRepoError, HTTPError, OSError) as exc:
-        print((GatedRepoError, HTTPError, OSError))
         failed_generators[model_id] = exc
         raise RuntimeError(
             f"Impossible de télécharger ou de charger {model_id}."
@@ -144,7 +126,6 @@ def _load_generator(model_id: str):
 
 
 def _truncate_article(tokenizer, article: str, max_tokens: int) -> Tuple[str, bool, int]:
-    """Keep the prompt within the model context window while preserving the extremities."""
     tokens = tokenizer.encode(article, add_special_tokens=False)
     token_count = len(tokens)
     if token_count <= max_tokens:
@@ -159,7 +140,6 @@ def _truncate_article(tokenizer, article: str, max_tokens: int) -> Tuple[str, bo
 
 
 def _compute_article_token_budget(generator: TextGenerationPipeline) -> int:
-    """Derive the maximum article token budget allowed by the underlying model."""
     tokenizer = generator.tokenizer
     model = getattr(generator, "model", None)
 
@@ -197,7 +177,6 @@ def _compute_article_token_budget(generator: TextGenerationPipeline) -> int:
     if max_context > reserved:
         limit = max_context - reserved
     else:
-        # If the context window is very small, keep at least half for the article.
         limit = max(32, max_context // 2)
 
     if max_context > MAX_NEW_TOKENS:
@@ -240,18 +219,11 @@ def _parse_response(text: str) -> Tuple[str, str]:
 
 
 def llm(article: str, label: str, model: str = MODEL_ID) -> Tuple[str, str]:
-    """Answer a question about an article using a causal LLM.
-
-    Returns a tuple (predicted, other); other is currently unused.
-    """
     generator = _load_generator(model)
     tokenizer = generator.tokenizer
 
     limit = _compute_article_token_budget(generator)
-    context, truncated, original_tokens = _truncate_article(tokenizer, article, limit)
-    print(
-        f"[llm] article tokens={original_tokens} (budget={limit}, truncated={'yes' if truncated else 'no'})"
-    )
+    context, truncated, _ = _truncate_article(tokenizer, article, limit)
     prompt = _build_prompt(context, label, truncated)
 
     outputs = generator(

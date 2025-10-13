@@ -5,9 +5,10 @@ from sqlalchemy import create_engine
 DATABASE_URL = "sqlite:///exemple.db"
 
 
+
 class Base(DeclarativeBase):
     pass
 
-
-def get_engine(database_url: str = DATABASE_URL, *, echo: bool = True) -> Engine:
-    return create_engine(database_url, echo=echo)
+    @staticmethod
+    def get_engine(database_url: str = DATABASE_URL, *, echo: bool = True) -> Engine:
+        return create_engine(database_url, echo=echo)
