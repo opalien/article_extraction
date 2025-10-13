@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import Integer, String, LargeBinary
 
 from .base import Base
-from .url_solver import solve_url
+from .other.url_solver import solve_url
 
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64)"

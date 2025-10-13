@@ -17,8 +17,8 @@ from sqlalchemy.sql.schema import Table
 from sqlalchemy.types import Integer, String, Date, Float, Text, DateTime, Boolean
 
 from .base import Base
-from .utils import download_zip, extract_zip
-from .columns import (
+from .other.utils import download_zip, extract_zip
+from .other.columns import (
     COLUMN_MAPPING,
     COLUMN_ORDER,
     COLUMN_CSV_TO_ATTR,
@@ -28,8 +28,8 @@ from .columns import (
     FLOAT_COLUMNS,
     BOOLEAN_COLUMNS,
 )
-from .convert import to_date, to_datetime, to_boolean, to_float, to_int
-from .split import normalize_epoch_dataframe, shuffled_split
+from .other.convert import to_date, to_datetime, to_boolean, to_float, to_int
+from .other.split import normalize_epoch_dataframe, shuffled_split
 
 EPOCH_TABLE_URL = "http://epoch.ai/data/generated/ai_models.zip"
 CACHE_DIR = Path(".cache/epoch_table")
@@ -148,8 +148,6 @@ class AbstractEpochTable(EpochColumns, Base):
 
     @classmethod
     def connect(cls: Type[T_EpochTable], engine: Engine) -> T_EpochTable:
-        if not inspect(engine).has_table(cls.__tablename__):
-            raise RuntimeError(f"table {cls.__tablename__} not found")
         return cls(engine)
 
     @classmethod

@@ -7,13 +7,13 @@ from html.parser import HTMLParser
 import pandas as pd
 from sqlalchemy import CheckConstraint, inspect
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.orm import Mapper, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.sql.schema import Table
 from sqlalchemy.types import Integer, Text
 
+from typing_extensions import cast
+
 from .base import Base
-from .paper_document_table import PaperDocumentTable
-
-
 class PaperTextTable(Base):
     __tablename__ = "paper_text"
 
@@ -36,7 +36,7 @@ class PaperTextTable(Base):
 
     @staticmethod
     def create_table(engine: Engine) -> "PaperTextTable":
-        PaperTextTable.metadata.create_all(engine, tables=[PaperTextTable.__table__])
+        PaperTextTable.metadata.create_all(engine, tables=[cast(Table, PaperTextTable.__table__)])
         return PaperTextTable(engine)
 
 
@@ -47,7 +47,7 @@ class ParagraphExtractor(HTMLParser):
         self._current_chunks: list[str] = []
         self.paragraphs: list[str] = []
 
-    def handle_starttag(self, tag: str, attrs) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() == "p" and not self._inside_p:
             self._inside_p = True
             self._current_chunks = []
@@ -74,7 +74,8 @@ def _pdf_bytes_to_text(data: bytes) -> str:
     text_chunks: list[str] = []
     with fitz.open(stream=data, filetype="pdf") as doc:
         for page in doc:
-            text_chunks.append(page.get_text())
+            page_obj = cast(Any, page)
+            text_chunks.append(page_obj.get_text())
     return "\n".join(text_chunks)
 
 
@@ -111,13 +112,14 @@ def _existing_ids(session: Session) -> set[int]:
 
 def load_texts(engine: Engine) -> None:
     with engine.begin() as connection:
-        PaperTextTable.__table__.create(connection, checkfirst=True)
+        cast(Table, PaperTextTable.__table__).create(connection, checkfirst=True)
 
     session: Session = sessionmaker(bind=engine, expire_on_commit=False)()
+    mapper: Mapper[Any] = cast(Mapper[Any], inspect(PaperTextTable))
     try:
         existing = _existing_ids(session)
         # Fetch candidate documents not yet converted
-        df = pd.read_sql_table(
+        df: pd.DataFrame = pd.read_sql_table(
             "paper_document",
             engine,
             columns=["id_paper", "document_type", "document"],
@@ -125,18 +127,23 @@ def load_texts(engine: Engine) -> None:
         if df.empty:
             print("No documents to convert.")
             return
-        df = df[~df["id_paper"].isin(existing)]
-        if df.empty:
+        pending_rows: list[tuple[int, str, bytes]] = []
+        for row in df.itertuples(index=False):
+            row_obj = cast(Any, row)
+            row_id = int(row_obj.id_paper)
+            if row_id in existing:
+                continue
+            doc_type = str(row_obj.document_type)
+            document_bytes = cast(bytes, row_obj.document)
+            pending_rows.append((row_id, doc_type, document_bytes))
+        if not pending_rows:
             print("All documents already converted.")
             return
 
         to_insert: list[dict[str, Any]] = []
         BATCH = 20
         processed = 0
-        for row in df.to_dict(orient="records"):
-            id_paper = int(row["id_paper"])  # type: ignore[arg-type]
-            doc_type = str(row["document_type"])
-            data: bytes = row["document"]  # type: ignore[assignment]
+        for id_paper, doc_type, data in pending_rows:
             print(f"[text] id_paper={id_paper} type={doc_type} bytes={len(data)}")
             try:
                 text_value = _to_text(doc_type, data)
@@ -150,13 +157,13 @@ def load_texts(engine: Engine) -> None:
             processed += 1
 
             if len(to_insert) >= BATCH:
-                session.bulk_insert_mappings(PaperTextTable, to_insert)
+                session.bulk_insert_mappings(mapper, to_insert)
                 session.commit()
                 print(f"[text][commit] inserted {processed} rows (batch {len(to_insert)})")
                 to_insert.clear()
 
         if to_insert:
-            session.bulk_insert_mappings(PaperTextTable, to_insert)
+            session.bulk_insert_mappings(mapper, to_insert)
             session.commit()
             print(f"[text][commit] inserted {processed} rows (final batch {len(to_insert)})")
     except Exception:

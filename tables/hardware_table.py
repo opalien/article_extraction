@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import Float, Integer, String
 
 from .base import Base
-from .utils import download_zip, extract_zip
+from .other.utils import download_zip, extract_zip
 
 
 HARDWARE_URL = "https://epoch.ai/data/generated/ml_hardware.zip"

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import Float, Integer, String
 
 from .base import Base
-from .utils import USER_AGENT
+from .other.utils import USER_AGENT
 
 
 COUNTRY_URL = "https://ourworldindata.org/grapher/carbon-intensity-electricity.csv"

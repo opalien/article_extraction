@@ -3,18 +3,13 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, Sequence, Type, cast
 
 import pandas as pd  # type: ignore[reportMissingTypeStubs]
-from sqlalchemy import ForeignKey, inspect
+from sqlalchemy import ForeignKey
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.sql.schema import Table
 from sqlalchemy.types import Float, Integer, String, Text
 
 from .base import Base
-
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from .epoch_table import AbstractEpochTable
-    from .paper_text import PaperTextTable
 
 
 class PaperInformation(Base):
@@ -57,49 +52,51 @@ class PaperInformation(Base):
 
     @classmethod
     def connect(cls: Type["PaperInformation"], engine: Engine, name: str = "paper_information") -> "PaperInformation":
-        if not inspect(engine).has_table(name):
-            raise RuntimeError(f"table {name} not found")
         return cls(engine, table_name=name)
 
     @classmethod
     def create_empty_table(cls: Type["PaperInformation"], engine: Engine, name: str = "paper_information") -> "PaperInformation":
         tbl = _get_variant_table(name)
         with engine.begin() as connection:
+            try:
+                connection.exec_driver_sql("PRAGMA busy_timeout=5000")
+            except Exception:
+                pass
             tbl.drop(connection, checkfirst=True)
             tbl.create(connection, checkfirst=True)
         return cls(engine, table_name=name)
 
 
     # --- data loaders ---
-    def load_from_epoch(self, table: "AbstractEpochTable") -> None:
+    def load_from_epoch(self, epoch_table: Any, country_table: Any, hardware_table: Any) -> None:
         # ensure destination exists
         with self.engine.begin() as connection:
             self._table.create(connection, checkfirst=True)
 
-        inspector = inspect(self.engine)
-
-        # optional lookups from country and hardware tables
+        # lookups from country and hardware tables (assumes they exist)
         countries: list[tuple[int, str]] = []
         hardware_catalog: list[tuple[int, str, Optional[float], Optional[float]]] = []
-        if inspector.has_table("country"):
-            country_df = pd.read_sql_query("SELECT id_country, country FROM country", self.engine)  # type: ignore[reportUnknownMemberType]
-            for row in country_df.itertuples(index=False):
-                normalized = _normalize_country(str(row.country))
-                if normalized:
-                    countries.append((int(row.id_country), normalized))  # type: ignore[arg-type]
-        if inspector.has_table("hardware"):
-            hardware_df = pd.read_sql_query(  # type: ignore[reportUnknownMemberType]
-                "SELECT id_hardware, hardware, compute, power FROM hardware",
-                self.engine,
-            )
-            for row in hardware_df.itertuples(index=False):
-                normalized = _normalize_hardware(str(row.hardware))
-                compute = None if pd.isna(row.compute) else float(row.compute)  # type: ignore[arg-type]
-                power = None if pd.isna(row.power) else float(row.power)  # type: ignore[arg-type]
-                hardware_catalog.append((int(row.id_hardware), normalized, compute, power))  # type: ignore[arg-type]
+        country_tbl_name = cast(str, country_table.__tablename__)
+        hardware_tbl_name = cast(str, hardware_table.__tablename__)
+        country_df = pd.read_sql_query(
+            f"SELECT id_country, country FROM {country_tbl_name}", self.engine
+        )  # type: ignore[reportUnknownMemberType]
+        for row in country_df.itertuples(index=False):
+            normalized = _normalize_country(str(row.country))
+            if normalized:
+                countries.append((int(row.id_country), normalized))  # type: ignore[arg-type]
+        hardware_df = pd.read_sql_query(  # type: ignore[reportUnknownMemberType]
+            f"SELECT id_hardware, hardware, compute, power FROM {hardware_tbl_name}",
+            self.engine,
+        )
+        for row in hardware_df.itertuples(index=False):
+            normalized = _normalize_hardware(str(row.hardware))
+            compute = None if pd.isna(row.compute) else float(row.compute)  # type: ignore[arg-type]
+            power = None if pd.isna(row.power) else float(row.power)  # type: ignore[arg-type]
+            hardware_catalog.append((int(row.id_hardware), normalized, compute, power))  # type: ignore[arg-type]
 
         # source epoch columns
-        epoch_table_name = cast(str, table.__tablename__)
+        epoch_table_name = cast(str, epoch_table.__tablename__)
         cols = [
             "id_paper",
             "model",
@@ -149,8 +146,9 @@ class PaperInformation(Base):
 
 
     # --- inference from text ---
-    def extract_informations_from_text(self, table: "PaperTextTable", extract_fn: Callable[[str, str], Any]) -> None:
-        source_table_name = getattr(table, "__tablename__", "paper_text")
+    def extract_informations_from_text(self, table: Any, extract_fn: Callable[[str, str], Any]) -> None:
+        source_table_name = table.__tablename__
+        source_engine = table.engine
 
         # ensure destination exists
         with self.engine.begin() as connection:
@@ -161,12 +159,13 @@ class PaperInformation(Base):
         type_map: dict[str, type] = {col.name: col.type.python_type for col in self._table.columns}
 
         # load all texts (simple approach suitable for testing)
-        df = pd.read_sql_table(source_table_name, self.engine, columns=["id_paper", "text"])  # type: ignore[reportUnknownMemberType]
+        df = pd.read_sql_table(source_table_name, source_engine, columns=["id_paper", "text"])  # type: ignore[reportUnknownMemberType]
         if df.empty:
             return
 
         session: Session = self.SessionLocal()
         try:
+            processed = 0
             for id_paper, text_value in df[["id_paper", "text"]].itertuples(index=False, name=None):
                 id_paper = int(id_paper)
                 text_value = str(text_value)
@@ -182,7 +181,11 @@ class PaperInformation(Base):
                 result = session.execute(update_stmt)
                 if result.rowcount == 0:
                     session.execute(self._table.insert().values({"id_paper": id_paper, **values}))
-
+                processed += 1
+                # Commit frequently to persist partial progress (e.g., if interrupted)
+                if processed % 1 == 0:
+                    session.commit()
+            # Final commit in case last batch had remainder
             session.commit()
         except Exception:
             session.rollback()
@@ -273,27 +276,24 @@ COUNTRY_ALIASES = {
 
 
 def _normalize_country(value: str) -> str:
-    import re
-    import unicodedata
-
-    value = re.sub(r"\([^)]*\)", " ", value)
-    decomposed = unicodedata.normalize("NFKD", value)
-    without_accents = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    cleaned = __import__("re").sub(r"[^0-9A-Za-z]+", " ", without_accents)
-    normalized = __import__("re").sub(r"\s+", " ", cleaned).strip().lower()
+    value = value.strip().lower()
+    result_chars: list[str] = []
+    for ch in value:
+        if ch.isalnum() or ch.isspace():
+            result_chars.append(ch)
+        else:
+            result_chars.append(" ")
+    normalized = " ".join("".join(result_chars).split())
     return normalized
 
 
 def _split_country_tokens(raw: object) -> list[str]:
-    import re
-
     value = _clean_value(raw)
     if value is None:
         return []
-    fragments = re.split(r"[,/;]+", value)
     tokens: list[str] = []
     seen: set[str] = set()
-    for fragment in fragments:
+    for fragment in value.replace("/", ",").replace(";", ",").split(","):
         fragment = fragment.strip()
         if not fragment:
             continue
@@ -395,27 +395,26 @@ def _select_country_id(raw_value: object, countries: Sequence[tuple[int, str]]) 
 
 # hardware matching
 def _normalize_hardware(value: str) -> str:
-    import re
-    import unicodedata
-
-    value = re.sub(r"\([^)]*\)", " ", value)
-    decomposed = unicodedata.normalize("NFKD", value)
-    without_accents = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    cleaned = re.sub(r"[^0-9A-Za-z]+", " ", without_accents)
-    normalized = re.sub(r"\s+", " ", cleaned).strip().lower()
+    value = value.strip().lower()
+    result_chars: list[str] = []
+    for ch in value:
+        if ch.isalnum() or ch.isspace():
+            result_chars.append(ch)
+        else:
+            result_chars.append(" ")
+    normalized = " ".join("".join(result_chars).split())
     return normalized
 
 
 def _split_hardware_tokens(raw: object) -> list[str]:
-    import re
-
     value = _clean_value(raw)
     if value is None:
         return []
-    fragments = re.split(r"[,/;+]| and |&", value, flags=re.IGNORECASE)
+    tmp = value.replace("/", ",").replace(";", ",").replace("+", ",").replace("&", ",")
+    tmp = tmp.replace(" and ", ",")
     tokens: list[str] = []
     seen: set[str] = set()
-    for fragment in fragments:
+    for fragment in tmp.split(","):
         fragment = fragment.strip()
         if not fragment:
             continue
@@ -477,8 +476,6 @@ SHORT_SUFFIX_MULTIPLIERS: dict[str, float] = {
 
 
 def _parse_numeric(value: Any) -> Optional[float]:
-    import re
-
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -490,22 +487,21 @@ def _parse_numeric(value: Any) -> Optional[float]:
     if not text:
         return None
 
-    suffix_match = re.match(r"([-+]?\d*\.?\d+)\s*([kmbt])\b", text)
-    if suffix_match:
-        base = float(suffix_match.group(1))
-        suffix = suffix_match.group(2)
-        return base * SHORT_SUFFIX_MULTIPLIERS[suffix]
+    # remove thousands separators and spaces
+    cleaned = text.replace(",", "").replace(" ", "")
 
-    cleaned = text.replace(",", "")
-    number_match = re.search(r"[-+]?\d*\.?\d+(?:e[-+]?\d+)?", cleaned)
-    if number_match:
-        number = float(number_match.group())
-        for word, factor in NUMERAL_MULTIPLIERS.items():
-            if re.search(rf"\b{word}\b", cleaned):
-                return number * factor
-        return number
+    # simple suffix handling without regex
+    if cleaned[-1:] in SHORT_SUFFIX_MULTIPLIERS:
+        try:
+            base = float(cleaned[:-1])
+            return base * SHORT_SUFFIX_MULTIPLIERS[cleaned[-1]]
+        except ValueError:
+            return None
 
-    return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
 
 
 def _coerce_value(value: Any, target_type: type) -> Any:
