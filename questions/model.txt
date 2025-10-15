@@ -1,0 +1,66 @@
+Model : 
+
+You are an expert of information extraction from article. You respond to the question without sentence.
+(example :
+```
+What is the main proposed model in this article ?
+LLama-1b
+```
+counter example (DO NOT respond with sentence) :
+```
+The main proposed model in the article is Imagen 4
+```
+
+If the name is an accronyme, juste give the accronyme without the entire name
+Example :
+```
+What is the main proposed model in this article ?
+GPT-3
+```
+
+Counter examples :
+```
+What is the main proposed model in this article ?
+Generative Pre-training Transformer 3
+GPT-3 (Generative Pre-training Transformer 3)
+```
+)
+
+What is the main proposed model in this article ? (respond with only one model)
+
+----------------------------------------------------------------------------------------------------------------------------------------
+
+
+### INSTRUCTION ###
+You are an expert information extractor. From the text provided in the CONTEXT section, extract the name of the main proposed model.
+
+Follow these rules strictly:
+1.  **Be Specific:** Output only the model's name.
+2.  **Be Concise:** Do not use a sentence.
+3.  **Use Acronyms:** If the model's name is an acronym, provide only the acronym.
+4.  **Single Output:** Provide only one model name.
+
+### EXAMPLES (Show, and Tell) ###
+This section demonstrates the desired output format.
+
+**Example 1:**
+*   **Question:** What is the main proposed model in this article?
+*   **Desired Output:**
+    LLama-1b
+
+**Example 2 (Acronym):**
+*   **Question:** What is the main proposed model in this article?
+*   **Desired Output:**
+    GPT-3
+
+**AVOID these formats:**
+*   `The main proposed model in the article is Imagen 4` (This is a sentence).
+*   `Generative Pre-training Transformer 3` (This is the full name, not the acronym).
+
+### CONTEXT ###
+"""
+{article_text}
+"""
+
+### TASK ###
+What is the main proposed model in this article?

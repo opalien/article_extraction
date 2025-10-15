@@ -1,0 +1,50 @@
+### INSTRUCTION ###
+You are an expert information extractor. Your task is to extract the publication year of the article provided in the CONTEXT section.
+
+Follow these rules strictly:
+1.  **Find the Main Publication Year:** Prioritize finding the year associated with the article's own publication, submission, or copyright date. Look for keywords like 'Published', 'Submitted', 'Received', 'Date', or a copyright symbol (©).
+2.  **4-Digit Integer Output:** The output must be a single four-digit integer (e.g., '2023').
+3.  **Avoid Citation Years:** You must NOT extract years from citations of other papers (e.g., 'as shown by Smith et al. (2017)') or from general historical references.
+4.  **Handle Full Dates:** If the year is part of a full date (e.g., 'October 14, 2024'), extract only the year.
+5.  **Handle Missing Information:** If the article's publication year is not explicitly mentioned, you MUST output an empty string ("").
+
+### EXAMPLES (Show, and Tell) ###
+This section demonstrates the desired output format.
+
+**Example 1 (Direct date):**
+*   **Context Text Snippet:** "...Correspondence to author@email.com. Published: October 2023..."
+*   **Question:** What is the publication year of this article?
+*   **Desired Output:**
+    2023
+
+**Example 2 (Full date format):**
+*   **Context Text Snippet:** "...Article submitted for review on March 15, 2024..."
+*   **Question:** What is the publication year of this article?
+*   **Desired Output:**
+    2024
+
+**Example 3 (Copyright notice):**
+*   **Context Text Snippet:** "...All rights reserved. © OpenAI 2022..."
+*   **Question:** What is the publication year of this article?
+*   **Desired Output:**
+    2022
+
+**Example 4 (Ignoring a citation year):**
+*   **Context Text Snippet:** "...Our work builds upon the Transformer architecture (Vaswani et al., 2017)..."
+*   **Question:** What is the publication year of this article?
+*   **Desired Output:**
+    ""
+
+**AVOID these formats:**
+*   `The year is 2023.` (This is a sentence).
+*   `October 2023` (Contains the month).
+*   `2017` (This is from a citation, not the main article).
+*   `Not found` or `N/A` (Use an empty string "" instead).
+
+### CONTEXT ###
+"""
+{article_text}
+"""
+
+### TASK ###
+What is the publication year of this article?

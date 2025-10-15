@@ -1,0 +1,56 @@
+### INSTRUCTION ###
+You are an expert information extractor. Your task is to extract the total number of GPUs used to train the main model, based on the CONTEXT section.
+
+Follow these rules strictly:
+1.  **Extract the Count:** Your goal is to find the quantity of GPUs used (e.g., how many units).
+2.  **Integer Output:** The output must be a single integer. Remove any surrounding text, commas, or symbols (e.g., convert '8x' to '8').
+3.  **Avoid Other Numbers:** Do not extract numbers related to GPU memory (GB), model versions, or other attributes. Only extract the count of GPU units.
+4.  **Handle Missing Information:** If the specific count of GPUs is not explicitly mentioned (even if the GPU type is), you MUST output an empty string ("").
+5.  **No Calculation:** Do not sum numbers or perform any calculations. Extract the single number representing the total count if available.
+
+### EXAMPLES (Show, and Tell) ###
+This section demonstrates the desired output format.
+
+**Example 1 (Standard number format):**
+*   **Context Text Snippet:** "...The model was trained on 512 NVIDIA H100 GPUs for three weeks..."
+*   **Question:** What is the number of GPUs used to train the model?
+*   **Desired Output:**
+    512
+
+**Example 2 (Number with 'x' prefix):**
+*   **Context Text Snippet:** "...The experiments were conducted on a machine with 8x A100 GPUs..."
+*   **Question:** What is the number of GPUs used to train the model?
+*   **Desired Output:**
+    8
+
+**Example 3 (Number in a phrase):**
+*   **Context Text Snippet:** "...A cluster of 1024 GPUs was used for the final training run..."
+*   **Question:** What is the number of GPUs used to train the model?
+*   **Desired Output:**
+    1024
+
+**Example 4 (Count is NOT present):**
+*   **Context Text Snippet:** "...The model was trained on NVIDIA H100 GPUs..."
+*   **Question:** What is the number of GPUs used to train the model?
+*   **Desired Output:**
+    ""
+
+**Example 5 (Ignoring non-count numbers):**
+*   **Context Text Snippet:** "...We used the latest A100 GPU with 80GB of HBM2e memory..."
+*   **Question:** What is the number of GPUs used to train the model?
+*   **Desired Output:**
+    ""
+
+**AVOID these formats:**
+*   `They used 512 GPUs.` (This is a sentence).
+*   `8x` (Contains a non-numeric symbol).
+*   `80` (This is the memory size, not the GPU count).
+*   `Not found` or `N/A` (Use an empty string "" instead).
+
+### CONTEXT ###
+"""
+{article_text}
+"""
+
+### TASK ###
+What is the number of GPUs used to train the model?

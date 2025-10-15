@@ -1,0 +1,49 @@
+### INSTRUCTION ###
+You are an expert information extractor. Your task is to extract the number of parameters of the main model from the CONTEXT section and convert it into a single integer.
+
+Follow these rules strictly:
+1.  **Integer Conversion:** You must convert the extracted number into a full integer. Treat 'B' or 'billion' as 1,000,000,000 and 'M' or 'million' as 1,000,000.
+2.  **No Estimation:** Extract the number only if it is explicitly stated. Do not perform any calculations or estimations beyond the required unit conversion.
+3.  **Handle Missing Information:** If the number of parameters is not explicitly mentioned, you MUST output an empty string ("").
+4.  **Output Format:** Your output must be a single line containing only the integer, with no commas, spaces, or other characters.
+
+### EXAMPLES (Show, and Tell) ###
+This section demonstrates the desired output format.
+
+**Example 1 (Unit: billion):**
+*   **Context Text Snippet:** "...The new model, named 'Zephyr', has 7 billion parameters..."
+*   **Question:** What is the number of parameters of the main proposed model?
+*   **Desired Output:**
+    7000000000
+
+**Example 2 (Unit: B):**
+*   **Context Text Snippet:** "...Our model's performance is state-of-the-art, with its 175B parameters..."
+*   **Question:** What is the number of parameters of the main proposed model?
+*   **Desired Output:**
+    175000000000
+
+**Example 3 (Unit: M with decimal):**
+*   **Context Text Snippet:** "...This lightweight version was trained with 1.5M parameters..."
+*   **Question:** What is the number of parameters of the main proposed model?
+*   **Desired Output:**
+    1500000
+
+**Example 4 (Number is NOT present):**
+*   **Context Text Snippet:** "...The 'Aura' model shows significant improvements in reasoning..."
+*   **Question:** What is the number of parameters of the main proposed model?
+*   **Desired Output:**
+    ""
+
+**AVOID these formats:**
+*   `The model has 7000000000 parameters.` (This is a sentence).
+*   `7,000,000,000` (Contains commas).
+*   `7B` or `7 billion` (Not converted to a pure integer).
+*   `Not found` or `N/A` (Use an empty string "" instead).
+
+### CONTEXT ###
+"""
+{article_text}
+"""
+
+### TASK ###
+What is the number of parameters of the main proposed model?

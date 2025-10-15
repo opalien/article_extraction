@@ -23,9 +23,10 @@ extract_fn_qa_curried = partial(
     question_map=question_map,
 )
 
+LLM_MODEL_ID = os.environ.get("LLM_MODEL_ID", "openai/gpt-oss-20b")
 extract_fn_llm_curried = partial(
     extract_fn_llm,
-    model_id="google/gemma-3n-E4B-it",
+    model_id=LLM_MODEL_ID,
     question_map=question_map,
 )
 
@@ -45,3 +46,7 @@ if __name__ == "__main__":
     variant_name = "llm"
     pi = PaperInformation.create_empty_table(engine, variant_name)
     pi.extract_informations_from_text(text_table, extract_fn_llm_curried)
+
+    variant_name = "qa_squad"
+    pi = PaperInformation.create_empty_table(engine, variant_name)
+    pi.extract_informations_from_text(text_table, extract_fn_qa_curried)
