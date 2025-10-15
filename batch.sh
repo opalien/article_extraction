@@ -20,7 +20,7 @@ BATCH_HIST="batch.txt"
 
 
 
-CMD=$"srun python -m B_tables.main"
+CMD="srun python -u run.py"
 
 echo "start"
 ml python/3.12

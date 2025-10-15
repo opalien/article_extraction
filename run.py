@@ -1,52 +1,38 @@
 import os
-from sqlalchemy import create_engine
-from tables.hardware_table import HardwareTable
-from tables.epoch_table import EpochTable
-from tables.country_table import CountryTable
-# from tables.paper_document_table import PaperDocumentTable, load_documents
-from tables.paper_text_table import PaperTextTable, load_texts
-from tables.paper_information_table import PaperInformation
-
-from models.llm import extract_fn as extract_fn_llm
-from models.qa_squad import extract_fn as extract_fn_qa_squad
 from functools import partial
 
+from sqlalchemy import create_engine
 
-question_map = {
-    "model": "What is the name of the proposed model in this paper ?",
-    #"abstract": "Provide the abstract of the paper in one sentence.",
-}
+from config import GENERATION_KWARGS, MAX_CONTEXT_TOKENS, MODEL_ID, WINDOW_STRIDE_TOKENS
+from models.llm import extract_fn as _extract_fn
+from tables.country_table import CountryTable
+from tables.hardware_table import HardwareTable
+from tables.paper_information_table import PaperInformation
+from tables.paper_text_table import PaperTextTable
 
-extract_fn_qa_curried = partial(
-    extract_fn_qa_squad,
-    model_id="FredNajjar/bigbird-QA-squad_v2.3",
-    question_map=question_map,
-)
 
-LLM_MODEL_ID = os.environ.get("LLM_MODEL_ID", "openai/gpt-oss-20b")
-extract_fn_llm_curried = partial(
-    extract_fn_llm,
+LLM_MODEL_ID = os.environ.get("LLM_MODEL_ID", MODEL_ID)
+
+extract_fn = partial(
+    _extract_fn,
     model_id=LLM_MODEL_ID,
-    question_map=question_map,
+    window_tokens=MAX_CONTEXT_TOKENS,
+    stride_tokens=WINDOW_STRIDE_TOKENS,
+    max_new_tokens=GENERATION_KWARGS["max_new_tokens"],
+    temperature=GENERATION_KWARGS["temperature"],
+    top_p=GENERATION_KWARGS["top_p"],
 )
-
 
 
 if __name__ == "__main__":
-    DB_PATH = "data/epoch.db"
-    db_path = DB_PATH
-
+    db_path = "data/epoch.db"
     engine = create_engine(f"sqlite:///{db_path}", connect_args={"timeout": 10})
 
-    hardware_table = HardwareTable.connect(engine)
-    country_table = CountryTable.connect(engine)
+    HardwareTable.connect(engine)
+    CountryTable.connect(engine)
     text_table = PaperTextTable.connect(engine)
 
-
     variant_name = "llm"
-    pi = PaperInformation.create_empty_table(engine, variant_name)
-    pi.extract_informations_from_text(text_table, extract_fn_llm_curried)
-
-    variant_name = "qa_squad"
-    pi = PaperInformation.create_empty_table(engine, variant_name)
-    pi.extract_informations_from_text(text_table, extract_fn_qa_curried)
+    paper_info = PaperInformation.create_empty_table(engine, variant_name)
+    paper_info.extract_informations_from_text_per_cell(text_table, extract_fn)
+    paper_info.complete_informations()

@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, Sequence, Type, cast
 
 import pandas as pd  # type: ignore[reportMissingTypeStubs]
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.sql.schema import Table
 from sqlalchemy.types import Float, Integer, String, Text
 
 from .base import Base
+from config import DEFAULT_MFU, DEFAULT_PUE, HARDWARE_MATCH_THRESHOLD
 
 
 class PaperInformation(Base):
@@ -17,6 +18,7 @@ class PaperInformation(Base):
 
     id_paper: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     model: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    hardware_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     abstract: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     architecture: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     parameters: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -36,6 +38,7 @@ class PaperInformation(Base):
 
     year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     training_compute: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    training_time_hours: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     power_draw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     co2eq: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
@@ -126,7 +129,7 @@ class PaperInformation(Base):
             rec["year"] = _to_year(row.get("publication_date"))
 
             rec["id_country"] = _select_country_id(row.get("country_of_organization"), countries)
-            hw_id, hw_compute, hw_power = _select_hardware_info(row.get("training_hardware"), hardware_catalog)
+            hw_id, hw_compute, hw_power, _ = _select_hardware_info(row.get("training_hardware"), hardware_catalog)
             rec["id_hardware"] = hw_id
             rec["h_compute"] = hw_compute
             rec["h_power"] = hw_power
@@ -194,8 +197,161 @@ class PaperInformation(Base):
             session.close()
 
 
+    def extract_informations_from_text_per_cell(self, table: Any, extract_fn: Callable[[str, str], Any]) -> None:
+        source_table_name = table.__tablename__
+        source_engine = table.engine
+
+        with self.engine.begin() as connection:
+            self._table.create(connection, checkfirst=True)
+
+        df = pd.read_sql_table(source_table_name, source_engine, columns=["id_paper", "text"])  # type: ignore[reportUnknownMemberType]
+        if df.empty:
+            return
+
+        numeric_targets = {"parameters", "h_number", "year"}
+        hardware_catalog: Optional[list[tuple[int, str, Optional[float], Optional[float]]]] = None
+
+        def ensure_row(session: Session, pk: int, values: dict[str, Any]) -> None:
+            pk_col = self._table.c.id_paper
+            update_stmt = self._table.update().where(pk_col == pk).values(**values)
+            result = session.execute(update_stmt)
+            if result.rowcount == 0:
+                session.execute(self._table.insert().values({"id_paper": pk, **values}))
+
+        session: Session = self.SessionLocal()
+        try:
+            for id_paper, text_value in df.itertuples(index=False, name=None):
+                pk = int(id_paper)
+                article_text = "" if text_value is None else str(text_value)
+
+                for field_name in ("model", "parameters", "h_number", "year", "hardware_text"):
+                    raw = extract_fn(article_text, field_name)
+                    store_value: Any
+                    if raw is None:
+                        store_value = None
+                    elif isinstance(raw, str):
+                        if raw.strip() == "":
+                            store_value = None
+                        elif field_name in numeric_targets:
+                            store_value = _coerce_value(raw, int)
+                        else:
+                            store_value = raw
+                    else:
+                        if field_name in numeric_targets:
+                            store_value = _coerce_value(raw, int)
+                        else:
+                            store_value = str(raw)
+
+                    ensure_row(session, pk, {field_name: store_value})
+                    session.commit()
+
+                    if field_name != "hardware_text":
+                        continue
+
+                    raw_text = raw if isinstance(raw, str) else ""
+                    if not raw_text or raw_text.strip() == "":
+                        continue
+
+                    if hardware_catalog is None:
+                        hardware_catalog = _build_hardware_catalog(self.engine)
+                    hw_id, hw_compute, hw_power, similarity = _select_hardware_info(raw_text, hardware_catalog)
+                    if hw_id is None or similarity is None or similarity < HARDWARE_MATCH_THRESHOLD:
+                        continue
+
+                    updates: dict[str, Any] = {
+                        "id_hardware": hw_id,
+                        "h_compute": hw_compute,
+                        "h_power": hw_power,
+                    }
+                    ensure_row(session, pk, updates)
+                    session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+
     def complete_informations(self) -> None:
-        pass
+        session: Session = self.SessionLocal()
+        try:
+            countries_factors = _load_country_emission_factors(self.engine)
+            stmt = select(
+                self._table.c.id_paper,
+                self._table.c.training_compute,
+                self._table.c.h_compute,
+                self._table.c.h_number,
+                self._table.c.training_time_hours,
+                self._table.c.power_draw,
+                self._table.c.h_power,
+                self._table.c.co2eq,
+                self._table.c.id_country,
+            )
+            rows = session.execute(stmt).all()
+            if not rows:
+                return
+
+            pk_col = self._table.c.id_paper
+
+            def persist(pk: int, values: dict[str, Any]) -> None:
+                if not values:
+                    return
+                update_stmt = self._table.update().where(pk_col == pk).values(**values)
+                result = session.execute(update_stmt)
+                if result.rowcount == 0:
+                    session.execute(self._table.insert().values({"id_paper": pk, **values}))
+                session.commit()
+
+            for row in rows:
+                pk = int(row.id_paper)
+                training_time_hours = row.training_time_hours
+                training_compute = row.training_compute
+                h_compute = row.h_compute
+                h_number = row.h_number
+
+                if (
+                    training_time_hours is None
+                    and training_compute is not None
+                    and training_compute > 0
+                    and h_compute is not None
+                    and h_number is not None
+                    and h_compute > 0
+                    and h_number > 0
+                    and DEFAULT_MFU > 0
+                ):
+                    denominator = h_number * h_compute * 1e12 * DEFAULT_MFU
+                    if denominator > 0:
+                        time_seconds = training_compute / denominator
+                        derived_hours = time_seconds / 3600.0
+                        persist(pk, {"training_time_hours": derived_hours})
+                        training_time_hours = derived_hours
+
+                energy_kwh: Optional[float] = None
+                if training_time_hours is not None and training_time_hours > 0:
+                    if row.power_draw is not None and row.power_draw > 0:
+                        energy_kwh = (row.power_draw / 1000.0) * training_time_hours * DEFAULT_PUE
+                    elif (
+                        row.h_power is not None
+                        and row.h_power > 0
+                        and h_number is not None
+                        and h_number > 0
+                    ):
+                        energy_kwh = (row.h_power * h_number) * training_time_hours * DEFAULT_PUE
+
+                if (
+                    row.co2eq is None
+                    and energy_kwh is not None
+                    and row.id_country is not None
+                ):
+                    factor = countries_factors.get(int(row.id_country))
+                    if factor is not None and factor >= 0:
+                        co2eq_value = energy_kwh * (factor / 1000.0)
+                        persist(pk, {"co2eq": co2eq_value})
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
 
 # ---------- helpers (adapted from B_tables.paper_informations) ----------
@@ -426,18 +582,50 @@ def _split_hardware_tokens(raw: object) -> list[str]:
     return tokens
 
 
+def _build_hardware_catalog(engine: Engine) -> list[tuple[int, str, Optional[float], Optional[float]]]:
+    query = "SELECT id_hardware, hardware, compute, power FROM hardware"
+    try:
+        df = pd.read_sql_query(query, engine)  # type: ignore[reportUnknownMemberType]
+    except Exception:
+        return []
+    catalog: list[tuple[int, str, Optional[float], Optional[float]]] = []
+    for row in df.itertuples(index=False):
+        normalized = _normalize_hardware(str(row.hardware))
+        compute = None
+        power = None
+        if hasattr(row, "compute") and not pd.isna(row.compute):  # type: ignore[reportUnknownMemberType]
+            compute = float(row.compute)  # type: ignore[arg-type]
+        if hasattr(row, "power") and not pd.isna(row.power):  # type: ignore[reportUnknownMemberType]
+            power = float(row.power)  # type: ignore[arg-type]
+        catalog.append((int(row.id_hardware), normalized, compute, power))  # type: ignore[arg-type]
+    return catalog
+
+
+def _load_country_emission_factors(engine: Engine) -> dict[int, float]:
+    query = "SELECT id_country, gco2_kwh FROM country"
+    try:
+        df = pd.read_sql_query(query, engine)  # type: ignore[reportUnknownMemberType]
+    except Exception:
+        return {}
+    factors: dict[int, float] = {}
+    for row in df.itertuples(index=False):
+        if hasattr(row, "gco2_kwh") and not pd.isna(row.gco2_kwh):  # type: ignore[reportUnknownMemberType]
+            factors[int(row.id_country)] = float(row.gco2_kwh)  # type: ignore[arg-type]
+    return factors
+
+
 def _select_hardware_info(
     raw_value: object,
     hardware_catalog: Sequence[tuple[int, str, Optional[float], Optional[float]]],
-) -> tuple[Optional[int], Optional[float], Optional[float]]:
+) -> tuple[Optional[int], Optional[float], Optional[float], Optional[float]]:
     tokens = _split_hardware_tokens(raw_value)
     if not tokens or not hardware_catalog:
-        return None, None, None
+        return None, None, None, None
 
     best_id: Optional[int] = None
     best_compute: Optional[float] = None
     best_power: Optional[float] = None
-    best_distance = float("inf")
+    best_similarity = 0.0
 
     for token in tokens:
         normalized_token = _normalize_hardware(token)
@@ -447,16 +635,16 @@ def _select_hardware_info(
             if not normalized_name:
                 continue
             if (normalized_token in normalized_name) or (normalized_name in normalized_token):
-                distance = 0.0
+                similarity = 1.0
             else:
-                distance = _jaro_winkler_distance(normalized_token, normalized_name)
-            if distance < best_distance:
-                best_distance = distance
+                similarity = _jaro_winkler_similarity(normalized_token, normalized_name)
+            if similarity > best_similarity:
+                best_similarity = similarity
                 best_id = hardware_id
                 best_compute = compute
                 best_power = power
 
-    return best_id, best_compute, best_power
+    return best_id, best_compute, best_power, best_similarity if best_id is not None else None
 
 
 # coercion for inference values

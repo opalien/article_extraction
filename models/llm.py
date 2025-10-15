@@ -2,245 +2,267 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Callable, Iterable, Literal, Optional, Tuple
-import math
-try:  # optional progress bar
-    from tqdm.auto import tqdm  # type: ignore
-except Exception:  # pragma: no cover
-    tqdm = None  # type: ignore
+from pathlib import Path
+from typing import Any, Iterator, Optional
 
+from config import (
+    GENERATION_KWARGS,
+    MAX_CONTEXT_TOKENS,
+    MODEL_ID,
+    WINDOW_STRIDE_TOKENS,
+)
 
-column_name_to_question = {
-    "model": "What is the name of the proposed model in this paper ?",
+_FIELD_TO_TEMPLATE = {
+    "model": "questions/model.txt",
+    "parameters": "questions/parameters.txt",
+    "h_number": "questions/h_number.txt",
+    "year": "questions/year.txt",
+    "hardware_text": "questions/hardware.txt",
 }
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-
-    
 
 @dataclass(frozen=True)
-class LLMExtractorConfig:
-    model_id: str
-    window: int = 2000
-    stride: int = 400
-    max_answer_chars: int = 200
-    temperature: float = 0.0
-    top_p: float = 1.0
-    system_prompt: str | None = None
-    question_template: str = "Extract the value for '{field}' from the text. Respond with the value only."
-    aggregator: Literal["first", "longest", "concat"] = "first"
+class _ModelArtifacts:
+    tokenizer: Any
+    model: Any
+    device: str
+    is_encoder_decoder: bool
+    max_context_tokens: int
 
 
-def _estimate_num_windows(text_len: int, window: int, stride: int) -> int:
-    if window <= 0 or stride <= 0:
-        return 1
-    if text_len <= window:
-        return 1
-    return 1 + int(math.ceil((text_len - window) / stride))
-
-
-def _iter_windows(text: str, window: int, stride: int) -> Iterable[str]:
-    if window <= 0 or stride <= 0:
-        yield text
-        return
-    n = len(text)
-    i = 0
-    while i < n:
-        yield text[i : i + window]
-        if i + window >= n:
-            break
-        i += stride
-
-
-def _aggregate(answers: list[str], mode: str) -> str:
-    if not answers:
-        return ""
-    if mode == "concat":
-        return " ".join(a for a in answers if a)
-    if mode == "longest":
-        return max(answers, key=len)
-    # default: first
-    return answers[0]
+@lru_cache(maxsize=None)
+def _load_template_text(template_path: str) -> str:
+    path = (_PROJECT_ROOT / template_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {path}")
+    return path.read_text(encoding="utf-8")
 
 
 @lru_cache(maxsize=2)
-def _load_text_generation_model(model_id: str) -> Tuple["Any", "Any", str]:
+def _load_model_artifacts(model_id: str) -> _ModelArtifacts:
     try:
-        from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM  # type: ignore
+        from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("transformers is required for LLM extraction") from exc
+
+    try:
         import torch  # type: ignore
     except Exception as exc:  # pragma: no cover
-        raise RuntimeError("transformers/torch required for LLM usage") from exc
+        raise RuntimeError("torch is required for LLM extraction") from exc
 
-    cfg = AutoConfig.from_pretrained(model_id)
+    config = AutoConfig.from_pretrained(model_id)
     tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
 
-    is_enc_dec = bool(getattr(cfg, "is_encoder_decoder", False))
-    if is_enc_dec:
+    if bool(getattr(config, "is_encoder_decoder", False)):
         model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        is_encoder_decoder = True
     else:
         model = AutoModelForCausalLM.from_pretrained(model_id)
+        is_encoder_decoder = False
 
-    device = "cuda" if hasattr(torch, "cuda") and torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.eval()
-    return tokenizer, model, device
+
+    max_context_tokens = _resolve_max_context_length(tokenizer, config)
+
+    return _ModelArtifacts(
+        tokenizer=tokenizer,
+        model=model,
+        device=device,
+        is_encoder_decoder=is_encoder_decoder,
+        max_context_tokens=max_context_tokens,
+    )
 
 
-def _build_inputs(tokenizer: Any, question: str, context: str, system_prompt: Optional[str]) -> Tuple["Any", int, bool]:
-    is_chat = hasattr(tokenizer, "apply_chat_template")
-    if is_chat:
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        user_text = (
-            "Answer the question using only the context. Respond with the value only.\n\n"
-            f"Question: {question}\n\nContext:\n{context}\n\nAnswer:"
-        )
-        messages.append({"role": "user", "content": user_text})
-        input_ids = tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt",
-        )
-        prompt_len = int(getattr(input_ids, "shape", [0, 0])[1])
-        return input_ids, prompt_len, True
-    else:
-        sys_text = (system_prompt.strip() + "\n\n") if system_prompt else ""
-        prompt = (
-            f"{sys_text}You are an information extraction assistant. "
-            f"Answer with the value only.\n\n"
-            f"Question: {question}\n\nContext:\n{context}\n\nAnswer:"
-        )
-        enc = tokenizer(prompt, return_tensors="pt")
-        input_ids = enc["input_ids"]
-        prompt_len = int(input_ids.shape[1])
-        return input_ids, prompt_len, False
+def _resolve_max_context_length(tokenizer: Any, config: Any) -> int:
+    candidates: list[int] = []
+    attrs = [
+        "max_position_embeddings",
+        "n_positions",
+        "max_sequence_length",
+        "max_context_length",
+        "seq_length",
+    ]
+    for attr in attrs:
+        value = getattr(config, attr, None)
+        if isinstance(value, int) and 0 < value <= 1_000_000:
+            candidates.append(int(value))
+    tokenizer_limit = getattr(tokenizer, "model_max_length", None)
+    if isinstance(tokenizer_limit, int) and 0 < tokenizer_limit <= 1_000_000:
+        candidates.append(int(tokenizer_limit))
+    if not candidates:
+        return MAX_CONTEXT_TOKENS
+    detected = max(candidates)
+    return min(MAX_CONTEXT_TOKENS, detected)
 
 
-def _generate(
+def _render_prompt(template_text: str, article_text: str) -> str:
+    return template_text.replace("{article_text}", article_text)
+
+
+def _generate_raw(
+    prompt: str,
     tokenizer: Any,
     model: Any,
     device: str,
-    input_ids: "Any",
-    prompt_len: int,
     *,
+    max_new_tokens: int,
     temperature: float,
     top_p: float,
-    max_answer_chars: int,
+    is_encoder_decoder: bool,
 ) -> str:
     try:
         import torch  # type: ignore
     except Exception as exc:  # pragma: no cover
-        raise RuntimeError("torch not available") from exc
+        raise RuntimeError("torch is required for LLM extraction") from exc
 
-    input_ids = input_ids.to(device)
+    enc = tokenizer(prompt, return_tensors="pt")
+    input_ids = enc["input_ids"].to(device)
+    attention_mask = enc.get("attention_mask")
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(device)
 
-    do_sample = bool(temperature and temperature > 0.0)
-    # rough mapping from characters to tokens; keep bounded
-    approx_tokens = max(16, min(128, int(max_answer_chars / 2) + 8))
-
-    gen_kwargs: dict[str, Any] = {
-        "max_new_tokens": approx_tokens,
+    do_sample = temperature > 0.0
+    generation_kwargs: dict[str, Any] = {
+        "max_new_tokens": max_new_tokens,
         "do_sample": do_sample,
-        "temperature": float(temperature) if do_sample else None,
-        "top_p": float(top_p) if do_sample else None,
+        "temperature": temperature if do_sample else None,
+        "top_p": top_p if do_sample else None,
         "pad_token_id": tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id,
         "eos_token_id": tokenizer.eos_token_id,
     }
-    # remove None values to avoid warnings
-    gen_kwargs = {k: v for k, v in gen_kwargs.items() if v is not None}
+    generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
 
     with torch.no_grad():
-        output_ids = model.generate(input_ids=input_ids, **gen_kwargs)
+        output_ids = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            **generation_kwargs,
+        )
 
-    if getattr(model.config, "is_encoder_decoder", False):
+    if is_encoder_decoder:
         decoded = tokenizer.decode(output_ids[0], skip_special_tokens=True)
     else:
-        new_tokens = output_ids[0][prompt_len:]
+        new_tokens = output_ids[0][input_ids.shape[1] :]
         decoded = tokenizer.decode(new_tokens, skip_special_tokens=True)
 
-    # lightweight postprocessing
-    text = decoded.strip()
-    if "\n" in text:
-        text = text.split("\n", 1)[0].strip()
-    if text.startswith(":"):  # residual from "Answer:" prefix
-        text = text[1:].strip()
-    return text[:max_answer_chars]
+    return decoded
+
+
+def _iter_article_windows(
+    text: str,
+    tokenizer: Any,
+    window_tokens: int,
+    stride_tokens: int,
+) -> Iterator[list[int]]:
+    if not text:
+        yield []
+        return
+
+    token_ids: list[int] = tokenizer.encode(text, add_special_tokens=False)
+    if not token_ids:
+        yield []
+        return
+
+    if window_tokens <= 0 or window_tokens >= len(token_ids):
+        yield token_ids
+        return
+
+    stride = stride_tokens if stride_tokens > 0 else window_tokens
+    if stride <= 0:
+        stride = window_tokens
+
+    start = 0
+    total = len(token_ids)
+    while start < total:
+        end = min(start + window_tokens, total)
+        yield token_ids[start:end]
+        if end >= total:
+            break
+        start += stride
 
 
 def extract_fn(
     text: str,
     field: str,
     *,
-    model_id: str,
-    window: int = 2000,
-    stride: int = 400,
-    max_answer_chars: int = 200,
-    temperature: float = 0.0,
-    top_p: float = 1.0,
-    system_prompt: str | None = None,
-    question_template: str = "Extract the value for '{field}' from the text. Respond with the value only.",
-    aggregator: Literal["first", "longest", "concat"] = "first",
-    question_map: Optional[dict[str, str]] = None,
-    call_model: Optional[Callable[[str, str, dict[str, Any]], str]] = None,
-) -> str:
-    """
-    Windowed LLM-based extractor. Accepts configuration so callers can curry.
-
-    - text, field: required by PaperInformation pipeline
-    - model_id, window, stride, etc.: tunable parameters for currying
-    - call_model: optional hook to inject the actual model call, for testing
-    """
-    if not text or not field:
-        return ""
-
-    qm = question_map if question_map is not None else column_name_to_question
-    if field not in qm:
+    model_id: str = MODEL_ID,
+    window_tokens: int = MAX_CONTEXT_TOKENS,
+    stride_tokens: int = WINDOW_STRIDE_TOKENS,
+    max_new_tokens: int = GENERATION_KWARGS["max_new_tokens"],
+    temperature: float = GENERATION_KWARGS["temperature"],
+    top_p: float = GENERATION_KWARGS["top_p"],
+) -> Optional[str]:
+    text = text or ""
+    if field not in _FIELD_TO_TEMPLATE:
         return None
 
-    prompt_kwargs = {"field": field}
-    question = qm.get(field) or question_template.format(**prompt_kwargs)
+    template_text = _load_template_text(_FIELD_TO_TEMPLATE[field])
+    artifacts = _load_model_artifacts(model_id)
+    tokenizer = artifacts.tokenizer
+    context_limit = artifacts.max_context_tokens
 
-    answers: list[str] = []
-    total = _estimate_num_windows(len(text), window, stride)
-    pbar = None
-    if tqdm is not None:
-        pbar = tqdm(total=total, desc=f"LLM:{field}")
-    for chunk in _iter_windows(text, window, stride):
-        payload = {
-            "model": model_id,
-            "temperature": temperature,
-            "top_p": top_p,
-            "system": system_prompt,
-            "question": question,
-            "context": chunk,
-            "max_chars": max_answer_chars,
-        }
-        if call_model is not None:
-            raw = call_model(question, chunk, payload)
+    base_prompt = _render_prompt(template_text, "")
+    base_tokens = len(tokenizer.encode(base_prompt, add_special_tokens=False))
+    article_budget = max(0, context_limit - base_tokens)
+    if article_budget == 0:
+        prompt = _render_prompt(template_text, "")
+        output = _generate_raw(
+            prompt,
+            tokenizer,
+            artifacts.model,
+            artifacts.device,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            is_encoder_decoder=artifacts.is_encoder_decoder,
+        )
+        return output if output.strip() else None
+
+    effective_window = window_tokens if window_tokens > 0 else article_budget
+    effective_window = min(effective_window, article_budget)
+    stride = stride_tokens if stride_tokens > 0 else effective_window
+
+    for token_window in _iter_article_windows(text, tokenizer, effective_window, stride):
+        if not token_window:
+            prompt = _render_prompt(template_text, "")
         else:
-            tok, net, device = _load_text_generation_model(model_id)
-            input_ids, prompt_len, _ = _build_inputs(tok, question, chunk, system_prompt)
-            raw = _generate(
-                tok,
-                net,
-                device,
-                input_ids,
-                prompt_len,
-                temperature=temperature,
-                top_p=top_p,
-                max_answer_chars=max_answer_chars,
-            )
-        answer = (raw or "").strip()[:max_answer_chars]
-        if answer:
-            answers.append(answer)
-        if pbar is not None:
-            pbar.update(1)
-    if pbar is not None:
-        pbar.close()
-    if not answers:
-        return (text or "").strip()[:max_answer_chars]
-    return _aggregate(answers, aggregator)
+            chunk_text = tokenizer.decode(token_window, skip_special_tokens=True)
+            prompt = _render_prompt(template_text, chunk_text)
+
+        prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
+        if len(prompt_tokens) > context_limit:
+            allowed = min(article_budget, len(token_window))
+            if allowed <= 0:
+                continue
+            truncated_text = tokenizer.decode(token_window[:allowed], skip_special_tokens=True)
+            prompt = _render_prompt(template_text, truncated_text)
+            prompt_tokens = tokenizer.encode(prompt, add_special_tokens=False)
+            if len(prompt_tokens) > context_limit:
+                continue
+
+        output = _generate_raw(
+            prompt,
+            tokenizer,
+            artifacts.model,
+            artifacts.device,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            is_encoder_decoder=artifacts.is_encoder_decoder,
+        )
+        if output and output.strip():
+            return output
+
+    return None
 
 
+__all__ = [
+    "extract_fn",
+    "_render_prompt",
+    "_generate_raw",
+    "_iter_article_windows",
+]
